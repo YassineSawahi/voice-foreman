@@ -1,8 +1,8 @@
 #!/bin/sh
 # Make the voice foreman permanent: user services that start with your desktop session and
 # restart if they crash. Safe to run again after an update.
-# Undo: systemctl --user disable --now vf-line vf-foremand vf-speech vf-probe.timer
-#       and remove ~/.config/pipewire/pipewire-pulse.conf.d/voice-foreman.conf
+# Undo: systemctl --user disable --now vf-line vf-foremand vf-speech vf-probe.timer,
+#       remove ~/.config/pipewire/pipewire-pulse.conf.d/voice-foreman.conf and ~/.local/bin/vf-ctl
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 U=$HOME/.config/systemd/user
@@ -34,6 +34,9 @@ for unit in "$P/systemd/"vf-*.service "$P/systemd/vf-probe.timer"; do
 done
 systemctl --user daemon-reload
 systemctl --user enable --now vf-speech.service vf-line.service vf-foremand.service vf-probe.timer
+# vf-ctl on PATH, where the omarchy-voice bar widget looks for it
+mkdir -p "$HOME/.local/bin"
+ln -sf "$P/bin/vf-ctl" "$HOME/.local/bin/vf-ctl"
 
 echo "5/5 checking"
 sleep 4

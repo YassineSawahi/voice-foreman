@@ -48,11 +48,13 @@ VF_PHONE=sip:phone@100.64.0.2:5062        # your phone's Tailscale address and B
 Then install everything as user services that start with your desktop session and restart if they crash:
 
 ```sh
-sh tools/install-services.sh    # writes the line config, the audio devices and the services
+sh tools/install-services.sh    # the line config, the audio devices, the services, and vf-ctl in ~/.local/bin
 sh tools/install-hooks.sh       # Claude Code hooks: Stop, Notification, UserPromptSubmit (backs up settings.json)
 ```
 
 Sessions that were already open pick up the new hooks only after a restart or `/hooks`.
+
+On Omarchy, add the bar widget: `omarchy plugin add https://github.com/YassineSawahi/omarchy-voice.git --enable`. It finds `vf-ctl` in `~/.local/bin` by itself.
 
 ### Phone
 
