@@ -119,6 +119,21 @@ The last three need the speech service and the virtual audio devices. They run a
 
 Everything is a `VF_*` environment variable, read from `~/.config/voice-foreman/env` by the services. The full list with defaults is `CONFIG` at the top of `foremand/foremand.py`. The persona is `foremand/prompts/brain.md`: tell it there how you like to be addressed.
 
+## Remove
+
+From the clone:
+
+```sh
+systemctl --user disable --now vf-line vf-foremand vf-speech vf-probe.timer
+rm ~/.config/systemd/user/vf-*.service ~/.config/systemd/user/vf-probe.timer ~/.local/bin/vf-ctl
+systemctl --user daemon-reload
+rm ~/.config/pipewire/pipewire-pulse.conf.d/voice-foreman.conf && systemctl --user restart pipewire-pulse
+docker compose down --rmi all -v                       # the speech container, its image and the Whisper cache
+rm -rf ~/.config/voice-foreman ~/.local/state/voice-foreman
+```
+
+Then remove the three hooks that run `foremand/hook.py` with `/hooks` in Claude Code (or edit `~/.claude/settings.json`), and delete the clone.
+
 ## License
 
 MIT
