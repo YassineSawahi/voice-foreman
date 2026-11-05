@@ -1,0 +1,6 @@
+#!/bin/sh
+# vf-text MESSAGE: text the phone now (it shows in Baresip's chat), through the line's local web control.
+set -e
+[ $# -ge 1 ] || { echo "usage: vf-text MESSAGE" >&2; exit 2; }
+q=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote("/message " + " ".join(sys.argv[1:]), safe=""))' "$@")
+curl -sf -o /dev/null "http://127.0.0.1:8000/?$q" && echo "Texted."

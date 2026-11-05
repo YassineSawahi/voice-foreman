@@ -1,0 +1,68 @@
+#
+# SIP accounts - one account per line
+#
+# Displayname <sip:user@domain;uri-params>;addr-params
+#
+#  uri-params:
+#    ;transport={udp,tcp,tls}
+#
+#  addr-params:
+#    ;100rel={yes,no,required}  # default: no
+#    ;answerdelay=0
+#    ;answermode={manual,early,auto,early-audio,early-video}
+#    ;audio_codecs=opus/48000/2,pcma,...
+#    ;audio_player=alsa,default
+#    ;audio_source=alsa,default
+#    ;autelev_pt=101
+#    ;auth_pass=password
+#    ;auth_user=username
+#    ;call_transfer={yes, no}
+#    ;catchall={yes, no}  # default: no
+#    ;cert=cert.pem
+#    ;dtmfmode={rtpevent, info, auto}
+#    ;extra=EXTRA-STRING
+#    ;fbregint=120
+#    ;inreq_allowed={yes, no}  # default: yes
+#    ;mediaenc={srtp,srtp-mand,srtp-mandf,dtls_srtp,zrtp}
+#    ;medianat={stun,turn,ice}
+#    ;mwi={yes, no}  # default: yes
+#    ;natpinhole={yes, no}  # default: no
+#    ;outbound2=sip:secondary.example.com
+#    ;outbound="sip:primary.example.com;transport=tcp"
+#    ;prio={0,1,2,3,...}
+#    ;ptime={10,20,30,40,...}
+#    ;pubint=0 (publishing off)
+#    ;regint=3600
+#    ;regq=0.5
+#    ;rtcp_mux={yes, no}  # default: no
+#    ;rwait=90
+#    ;sip_autoanswer={yes, no}
+#    ;sip_autoanswer_beep={off, on, local}
+#    ;sip_autoredirect={yes, no}  # default: no
+#    ;sipnat={outbound}
+#    ;stunpass=STUN/TURN/ICE-password
+#    ;stunserver=stun:[user]@host[:port]
+#    ;stunuser=STUN/TURN/ICE-username
+#    ;tcpsrcport=6060
+#    ;uas_pass=password
+#    ;uas_user=username
+#    ;video_codecs=h264,vp8,...
+#    ;video_display=x11,nil
+#    ;video_source=v4l2,/dev/video0
+#
+# Examples:
+#
+#  <sip:user@example.com>;auth_pass=secret
+#  <sip:user@example.com;transport=tcp>;auth_pass=secret
+#  <sip:user@192.0.2.4;transport=tcp>;auth_pass=secret
+#  <sip:user@[2001:db8:0:16:216:6fff:fe91:614c]:5070;transport=tcp>;auth_pass=secret
+#
+#
+# A very basic example
+#<sip:user@iptel.org>;auth_pass=PASSWORD
+#
+# A registrar-less account
+#<sip:alice@office>;regint=0
+
+# Voice foreman: direct calls over the tailnet, no registrar.
+"Omarchy" <sip:claude@{{ADDRESS}}:5070>;regint=0;answermode=auto;audio_codecs=opus/48000/2,PCMU,PCMA

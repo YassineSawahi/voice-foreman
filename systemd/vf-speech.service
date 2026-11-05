@@ -1,0 +1,14 @@
+[Unit]
+Description=Voice foreman speech service (Docker: whisper, Kokoro, end-of-speech)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory={{PROJECT}}
+ExecStart=/usr/bin/docker compose up -d speech
+ExecStop=/usr/bin/docker compose stop speech
+
+[Install]
+WantedBy=graphical-session.target

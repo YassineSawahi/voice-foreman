@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""vf-pref WORD mute|text|call|clear: how Omarchy treats a session whose folder contains WORD.
+
+mute: never call about it. text: text instead of calling when it finishes. call: always call
+(even in away-only mode). clear: back to the default. With no arguments, lists them.
+"""
+import json
+import sys
+from pathlib import Path
+
+PREFS = Path.home() / ".config/voice-foreman/prefs.json"
+try:
+    prefs = json.loads(PREFS.read_text())
+except (OSError, ValueError):
+    prefs = {}
+if len(sys.argv) == 3 and sys.argv[2] in ("mute", "text", "call", "clear"):
+    word = sys.argv[1].lower()
+    if sys.argv[2] == "clear":
+        prefs.pop(word, None)
+    else:
+        prefs[word] = sys.argv[2]
+    PREFS.parent.mkdir(parents=True, exist_ok=True)
+    PREFS.write_text(json.dumps(prefs, indent=1))
+elif len(sys.argv) != 1:
+    sys.exit(__doc__)
+print(json.dumps(prefs) if prefs else "No session preferences: Omarchy calls about every session.")

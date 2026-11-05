@@ -1,0 +1,14 @@
+[Unit]
+Description=Voice foreman phone line (baresip on the tailnet)
+After=graphical-session.target pipewire-pulse.service
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/baresip -f {{PROJECT}}/line/baresip -T -c
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.local/state/voice-foreman/baresip.log
+StandardError=inherit
+
+[Install]
+WantedBy=graphical-session.target

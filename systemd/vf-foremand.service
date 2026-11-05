@@ -1,0 +1,19 @@
+[Unit]
+Description=Voice foreman call handler (Omarchy on the phone)
+After=vf-line.service vf-speech.service
+Wants=vf-line.service vf-speech.service
+PartOf=graphical-session.target
+
+[Service]
+WorkingDirectory={{PROJECT}}
+# claude and omarchy-shell must be on PATH; install-services.sh fills it in from yours
+Environment=PATH={{PATH}}
+EnvironmentFile=-%h/.config/voice-foreman/env
+ExecStart={{PROJECT}}/.venv/bin/python foremand/foremand.py
+Restart=always
+RestartSec=5
+# foremand writes its own log: ~/.local/state/voice-foreman/foremand.log
+StandardOutput=null
+
+[Install]
+WantedBy=graphical-session.target

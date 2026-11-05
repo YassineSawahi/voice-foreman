@@ -1,0 +1,30 @@
+# Voice foreman: the parts that run in Docker.
+# The brain (claude -p) and session control run on the host: they need your Claude
+# login and your running Claude sessions.
+name: voice-foreman
+
+services:
+  speech:
+    build: ./speech
+    image: voice-foreman/speech:dev
+    ports:
+      - "127.0.0.1:8765:8765"   # local only
+    volumes:
+      - ./models/kokoro:/models/kokoro:ro
+      - whisper-cache:/root/.cache/huggingface
+    environment:
+      STT_MODEL: large-v3-turbo
+      STT_LANGUAGE: en           # empty = detect the language per utterance
+      TTS_VOICE: af_heart
+      END_SILENCE_MS: "450"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  whisper-cache:

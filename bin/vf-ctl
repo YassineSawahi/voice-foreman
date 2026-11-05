@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""vf-ctl: switches and status for the voice foreman (the Omarchy bar plugin runs this).
+
+  vf-ctl                       status as JSON
+  vf-ctl calls on|off|toggle   whether Omarchy calls you
+  vf-ctl mode always|away      call always, or only when you're away from the PC
+  vf-ctl power on|off|toggle   start or stop everything (line, Omarchy, speech; off frees the GPU)
+  vf-ctl call-me               a test call right now
+  vf-ctl quiet 22:00-07:00|off no calls in that window; one digest call when it ends
+  vf-ctl dnd on|off            treat Do Not Disturb (PC, synced with the phone) as quiet time
+  vf-ctl pin 1234|off          keypad PIN that unlocks stopping a session by voice
+  vf-ctl desk on|off|toggle    talk to Omarchy at the PC (mic and speakers); during a phone call, on moves it here
+"""
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+SETTINGS = HOME / ".config/voice-foreman/settings.json"
+STATUS = HOME / ".local/state/voice-foreman/status.json"
+PROBE_LOG = HOME / ".local/state/voice-foreman/probe.log"
+SPOOL = HOME / ".local/state/voice-foreman/events"
+DEFAULTS = {"calls": True, "mode": "always", "quiet": None, "respect_dnd": True, "pin": None}
+UNITS = ["vf-speech.service", "vf-line.service", "vf-foremand.service"]  # start order
+
+
+def read_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def save_settings(**changes):
+    current = {**DEFAULTS, **read_json(SETTINGS, {}), **changes}
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.with_suffix(".tmp").write_text(json.dumps(current))
+    SETTINGS.with_suffix(".tmp").replace(SETTINGS)
+    return current
+
+
+def active(unit):
+    return subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True,
+                          text=True).stdout.strip() == "active"
+
+
+def phone():
+    """The last silent check: is the phone's Baresip answering?"""
+    try:
+        last = PROBE_LOG.read_text().strip().splitlines()[-1]
+    except (OSError, IndexError):
+        return {"reachable": None, "checked": None}
+    stamp, _, rest = last.partition(" reachable=")
+    reachable = rest.split()[0] == "yes" or "repaired=yes" in rest
+    try:
+        checked = round(time.mktime(time.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S")))
+    except ValueError:
+        checked = None
+    return {"reachable": reachable, "checked": checked}
+
+
+def status():
+    services = {u.split(".")[0]: active(u) for u in UNITS}
+    live = read_json(STATUS, {})
+    if time.time() - live.get("updated", 0) > 10:  # foremand isn't writing: treat as unknown
+        live = {}
+    cfg = {**DEFAULTS, **read_json(SETTINGS, {})}
+    cfg["pin"] = bool(cfg.get("pin"))  # set or not; never the digits
+    return {"power": services["vf-foremand"] and services["vf-line"], "services": services, **cfg, "in_call": bool(live.get("in_call")),
+            "desk": bool(live.get("desk")),
+            "ringing": bool(live.get("ringing")), "pending": live.get("pending", 0),
+            "quiet_now": bool(live.get("quiet")),
+            "next_call": live.get("next_call"), "callback": live.get("callback"), "phone": phone()}
+
+
+def power(on):
+    subprocess.run(["systemctl", "--user", "start" if on else "stop"] + (UNITS if on else UNITS[::-1]),
+                   capture_output=True)
+
+
+def spool(note):
+    """Hand foremand a note, the way the hooks do (written aside, then renamed in)."""
+    SPOOL.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-{note['hook_event_name']}.json"
+    (SPOOL / f".{name}").write_text(json.dumps({**note, "at": time.time()}))
+    (SPOOL / f".{name}").rename(SPOOL / name)
+
+
+def call_me():
+    spool({"hook_event_name": "Callback", "minutes": 0, "reason": "a test call you asked for from the status bar on your PC"})
+
+
+def main(args):
+    cmd, arg = (args + ["", ""])[:2]
+    if cmd == "calls" and arg in ("on", "off", "toggle"):
+        on = not {**DEFAULTS, **read_json(SETTINGS, {})}["calls"] if arg == "toggle" else arg == "on"
+        save_settings(calls=on)
+    elif cmd == "mode" and arg in ("always", "away"):
+        save_settings(mode=arg)
+    elif cmd == "power" and arg in ("on", "off", "toggle"):
+        power(not status()["power"] if arg == "toggle" else arg == "on")
+    elif cmd == "call-me":
+        call_me()
+    elif cmd == "quiet" and arg:
+        save_settings(quiet=None if arg == "off" else arg)
+    elif cmd == "dnd" and arg in ("on", "off"):
+        save_settings(respect_dnd=arg == "on")
+    elif cmd == "desk" and arg in ("on", "off", "toggle"):
+        on = not status()["desk"] if arg == "toggle" else arg == "on"
+        spool({"hook_event_name": "Desk", "action": "start" if on else "stop"})
+    elif cmd == "pin" and arg and (arg == "off" or arg.isdigit()):
+        save_settings(pin=None if arg == "off" else arg)
+    elif cmd:
+        print(__doc__, file=sys.stderr)
+        return 2
+    print(json.dumps(status()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

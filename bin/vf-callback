@@ -1,0 +1,21 @@
+#!/bin/sh
+# vf-callback MINUTES [REASON]: ask foremand to call you back later. Omarchy runs this on a call
+# when you say "call me back in twenty minutes"; until then foremand holds other calls too.
+set -e
+[ $# -ge 1 ] || { echo "usage: vf-callback MINUTES [REASON]" >&2; exit 2; }
+minutes=$1
+shift
+exec python3 -I - "$minutes" "$*" "${VF_SPOOL:-$HOME/.local/state/voice-foreman/events}" <<'EOF'
+import json
+import sys
+import time
+from pathlib import Path
+
+minutes, reason, spool = float(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+spool.mkdir(parents=True, exist_ok=True)
+name = f"{time.time_ns()}-Callback.json"
+(spool / f".{name}").write_text(json.dumps(
+    {"hook_event_name": "Callback", "minutes": minutes, "reason": reason, "at": time.time()}))
+(spool / f".{name}").rename(spool / name)  # atomic for foremand
+print("Callback set for", time.strftime("%H:%M", time.localtime(time.time() + minutes * 60)))
+EOF

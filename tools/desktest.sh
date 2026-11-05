@@ -1,0 +1,120 @@
+#!/bin/sh
+# Desk-mode test, no phone and no real mic or speakers: two throwaway PipeWire sinks stand in for the
+# PC's microphone (speech is played into it) and speakers (recorded). Two scenarios, each with a fresh
+# dev line and foremand:
+#   A  desk talk from the bar, a question, then "call me": the talk carries over to a fake phone
+#   B  a fake caller says "move this to my PC": the talk carries over to the desk, then goodbye
+# Needs the speech service and the vf_rx/vf_tx sinks. Usage: tools/desktest.sh [A|B]
+set -e
+P=$(cd "$(dirname "$0")/.." && pwd)
+# This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
+ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
+[ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
+T=$HOME/.cache/vf-tmp/desktest
+WHICH=${1:-AB}
+rm -rf "$T" && mkdir -p "$T"
+
+SINK0=$(pactl get-default-sink); SOURCE0=$(pactl get-default-source)
+MIC=$(pactl load-module module-null-sink sink_name=vf_test_mic sink_properties=device.description=vf-test-mic)
+SPK=$(pactl load-module module-null-sink sink_name=vf_test_spk sink_properties=device.description=vf-test-speakers)
+PIDS=""
+cleanup() {
+  kill $PIDS 2>/dev/null || true
+  pactl unload-module "$MIC" 2>/dev/null; pactl unload-module "$SPK" 2>/dev/null
+  pactl set-default-sink "$SINK0"; pactl set-default-source "$SOURCE0"  # never leave your audio moved
+}
+trap cleanup EXIT
+
+tts() { curl -sf -X POST 127.0.0.1:8765/tts -H 'Content-Type: application/json' -d "{\"text\": \"$1\"}" -o "$2"; }
+say() {  # speak into the fake desk microphone
+  tts "$1" "$S/say.raw"
+  echo "$(date +%T.%3N) >> desk mic: $1" >> "$S/script.log"
+  pacat --playback --device=vf_test_mic --format=s16le --rate=24000 --channels=1 --raw < "$S/say.raw"
+}
+count() { grep -cE "$1" "$S/foremand.log" 2>/dev/null || true; }
+wait_for() {  # wait_for <regex> <at least N matches> <seconds>
+  for i in $(seq 1 "$3"); do [ "$(count "$1")" -ge "$2" ] && return 0; sleep 1; done
+  echo "!! timed out waiting for: $1" | tee -a "$S/script.log"; return 0
+}
+settle() {  # wait until Omarchy has said nothing new for 3 s
+  last=-1
+  while :; do n=$(count "claude:|moving|carry on|phone leg|recap texted|recap kept|no recap"); [ "$n" = "$last" ] && break; last=$n; sleep 3; done
+}
+start_line_and_foremand() {  # $1 extra env
+  baresip -f "$P/line/baresip-dev" -T -c > "$S/line.log" 2>&1 &
+  PIDS="$PIDS $!"
+  sleep 1
+  env VF_STATE="$S/state" VF_SPOOL="$S/spool" VF_CALLS_LOG="$S/calls.jsonl" VF_NOTIFY=0 VF_CALLS=1 \
+    VF_IGNORE_QUIET=1 VF_CTRL=127.0.0.1:4445 VF_PHONE=sip:phone@$ADDR:5074 \
+    VF_ALLOWED_CALLERS=$ADDR VF_DESK_SOURCE=vf_test_mic.monitor VF_DESK_SINK=vf_test_spk $1 \
+    "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$S/foremand.log" 2>&1 &
+  PIDS="$PIDS $!"
+  sleep 2
+}
+fake_baresip() {  # fake_baresip <dir> <port> <rtp base> <mic wav> <account line> [extra args]
+  mkdir -p "$1"
+  cp "$P/line/baresip-dev/config" "$1/"
+  sed -i -E \
+    -e "s|^sip_listen\s.*|sip_listen\t\t$ADDR:$2|" \
+    -e "s|^rtp_ports\s.*|rtp_ports\t\t$3-$(($3 + 19))|" \
+    -e "s|^audio_source\s.*|audio_source\t\taufile,$4|" \
+    -e "s|^audio_player\s.*|audio_player\t\taufile,$1/heard.wav|" \
+    -e "s|^audio_alert\s.*|audio_alert\t\taufile,$1/alert.wav|" \
+    -e 's|^module_app\s+ctrl_tcp\.so|#module_app\t\tctrl_tcp.so|' "$1/config"
+  echo "$5" > "$1/accounts"; touch "$1/contacts"
+}
+desk_heard() {
+  parec --device=vf_test_spk.monitor --format=s16le --rate=16000 --channels=1 --raw > "$S/desk-heard.raw" &
+  PIDS="$PIDS $!"
+}
+report() {
+  echo; echo "===== scenario $1"; cat "$S/script.log" 2>/dev/null
+  echo "== foremand"; grep -vE "opening:" "$S/foremand.log" | cut -c1-170
+  echo "== heard on the desk speakers"; curl -sf -X POST 127.0.0.1:8765/stt --data-binary @"$S/desk-heard.raw"; echo
+  for f in "$S"/*/heard.wav; do
+    [ -s "$f" ] || continue
+    ffmpeg -loglevel error -y -i "$f" -f s16le -ar 16000 -ac 1 "$f.raw"
+    echo "== heard by $(basename "$(dirname "$f")")"; curl -sf -X POST 127.0.0.1:8765/stt --data-binary @"$f.raw"; echo
+  done
+}
+
+case "$WHICH" in *A*)
+  S=$T/A; mkdir -p "$S/spool"; PIDS=""
+  # the fake phone says "Hello?" 1.5 s after it picks up
+  tts "Hello?" "$S/hello.raw"
+  ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$S/hello.raw" -af "adelay=1500,apad=pad_dur=60" -ar 48000 "$S/phone-mic.wav"
+  fake_baresip "$S/phone" 5074 43000 "$S/phone-mic.wav" "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2"
+  baresip -f "$S/phone" -T -c -t 200 > "$S/phone.log" 2>&1 &
+  PIDS="$PIDS $!"
+  start_line_and_foremand ""
+  desk_heard
+  echo '{"hook_event_name": "Desk", "action": "start"}' > "$S/spool/1-Desk.json"   # the bar's "Talk here"
+  wait_for "claude:" 1 60; settle
+  say "What is two plus two?"
+  wait_for "you: .*(two|2)" 1 20; wait_for "claude:" 2 40; settle
+  say "Thanks. I'm heading out, call me on my phone."
+  wait_for "calling you to carry on" 1 40; wait_for "call [0-9a-f]+: desk" 1 30
+  sleep 4; settle
+  curl -s -o /dev/null "http://127.0.0.1:8001/?%2Fhangup"   # you hang up the phone
+  wait_for "recap texted|recap kept|no recap" 1 150
+  report A
+  kill $PIDS 2>/dev/null || true; sleep 1
+;; esac
+
+case "$WHICH" in *B*)
+  S=$T/B; mkdir -p "$S/spool"; PIDS=""
+  # the caller asks to move 6 s in (after the greeting)
+  tts "Please move this call to my PC." "$S/ask.raw"
+  ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$S/ask.raw" -af "adelay=6000,apad=pad_dur=40" -ar 48000 "$S/caller-mic.wav"
+  fake_baresip "$S/caller" 5072 42000 "$S/caller-mic.wav" "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2"
+  start_line_and_foremand ""
+  desk_heard
+  baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:claude@$ADDR:5070" > "$S/caller.log" 2>&1 &
+  PIDS="$PIDS $!"
+  wait_for "phone leg closed" 1 60; settle
+  say "What day is it today?"
+  wait_for "you: .*day" 1 20; wait_for "claude:" 3 40; settle
+  say "Great, thanks. Bye."
+  wait_for "recap texted|recap kept|no recap" 1 150
+  report B
+;; esac

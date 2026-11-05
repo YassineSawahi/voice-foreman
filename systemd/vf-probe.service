@@ -1,0 +1,7 @@
+[Unit]
+Description=Voice foreman: silent check that the phone's Baresip answers
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/voice-foreman/env
+ExecStart=/usr/bin/python3 -I {{PROJECT}}/tools/probe.py

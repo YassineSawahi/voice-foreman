@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""vf-session NAME: what a Claude Code session is doing, even mid-task (read-only).
+
+Finds the session by name, id or folder word (`claude agents --json --all`) and prints its status
+and the last few things it said, from its transcript. Omarchy runs this on calls.
+"""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main(query):
+    out = subprocess.run(["claude", "agents", "--json", "--all"], capture_output=True, text=True, timeout=10).stdout
+    agents = json.loads(out or "[]")
+    q = query.lower().replace(" ", "").replace("-", "").replace("_", "")
+    def key(a):
+        return " ".join(str(a.get(k) or "") for k in ("name", "sessionId", "cwd")).lower().replace("-", "").replace("_", "")
+    matches = [a for a in agents if q in key(a)]
+    if not matches:
+        print(f"No session matches {query!r}. Sessions: " + ", ".join(a.get("name", "?") for a in agents))
+        return 1
+    a = max(matches, key=lambda a: a.get("startedAt") or "")
+    print(f"{a.get('name')}: {a.get('status')}/{a.get('state')} in {a.get('cwd')}"
+          + (f", waiting for: {a['waitingFor']}" if a.get("waitingFor") else ""))
+    slug = (a.get("cwd") or "").replace("/", "-").replace("_", "-")
+    transcript = Path.home() / ".claude/projects" / slug / f"{a.get('sessionId')}.jsonl"
+    texts = []
+    try:
+        for line in transcript.read_text().splitlines()[-400:]:
+            ev = json.loads(line)
+            if ev.get("type") != "assistant":
+                continue
+            for block in ev.get("message", {}).get("content", []) or []:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text", "").strip():
+                    texts.append((ev.get("timestamp", "")[11:16], block["text"].strip()))
+    except (OSError, ValueError):
+        print("(no transcript found)")
+        return 0
+    for stamp, text in texts[-3:]:
+        print(f"[{stamp} UTC] {' '.join(text.split())[:900]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(" ".join(sys.argv[1:]) or "") if len(sys.argv) > 1 else print(__doc__) or 2)

@@ -1,0 +1,10 @@
+models/
+__pycache__/
+*.log
+.venv/
+# written by tools/configure-line.sh from the .in templates, and baresip's own state
+line/*/config
+line/*/accounts
+line/*/contacts
+line/*/uuid
+line/*/current_contact

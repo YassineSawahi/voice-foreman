@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""vf-stop-session NAME: stop a Claude Code session, only after the keypad PIN was entered on this call.
+
+The PIN check is foremand's: typing the right digits then # on the phone keypad unlocks this
+for ten minutes. Set the PIN with `vf-ctl pin 1234`.
+"""
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PIN_OK = Path.home() / ".local/state/voice-foreman/pin_ok"
+if len(sys.argv) != 2:
+    sys.exit(__doc__)
+try:
+    unlocked = json.loads(PIN_OK.read_text()).get("until", 0) > time.time()
+except (OSError, ValueError):
+    unlocked = False
+if not unlocked:
+    sys.exit("Locked: ask the user to type their PIN on the keypad and press #. "
+             "(If no PIN is set, they set one at the PC with: vf-ctl pin 1234)")
+agents = json.loads(subprocess.run(["claude", "agents", "--json"], capture_output=True, text=True).stdout or "[]")
+q = sys.argv[1].lower().replace("-", "").replace("_", "")
+match = [a for a in agents if q in " ".join(str(a.get(k) or "") for k in ("name", "cwd")).lower().replace("-", "").replace("_", "")]
+if len(match) != 1:
+    sys.exit(f"Need exactly one match for {sys.argv[1]!r}; found: " + ", ".join(a.get("name", "?") for a in match or agents))
+r = subprocess.run(["claude", "stop", match[0]["id"]], capture_output=True, text=True)
+print(f"Stopped {match[0].get('name')}." if r.returncode == 0 else f"Couldn't stop it: {r.stderr.strip()[:200]}")

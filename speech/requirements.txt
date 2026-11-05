@@ -1,0 +1,7 @@
+# The Dockerfile swaps the CPU onnxruntime these pull in for onnxruntime-gpu.
+faster-whisper>=1.1
+kokoro-onnx>=0.4
+soundfile
+numpy
+fastapi
+uvicorn[standard]
