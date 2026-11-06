@@ -84,7 +84,7 @@ READ_ONLY_COMMANDS = [
     "claude agents", "claude logs", "omarchy version",
 ]
 BRAIN_ALLOWED = (["Read", "ListAgents", "SendMessage", "WebSearch", "Bash(cd *)", "Bash(claude --bg *)",
-                  "mcp__vf__text_phone", "mcp__vf__call_back",
+                  "mcp__vf__text_phone", "mcp__vf__call_back", "mcp__vf__pc_action",
                   f"Bash({PROJECT}/bin/vf-session *)", f"Bash({PROJECT}/bin/vf-pref *)",
                   f"Bash({PROJECT}/bin/vf-stop-session *)"]
                  + [f"Bash({c})" for c in READ_ONLY_COMMANDS]

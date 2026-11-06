@@ -111,6 +111,16 @@ Control it from the bar widget, or with `bin/vf-ctl`: `vf-ctl power on|off`, `vf
 
 **Not just Claude Code:** `bin/vf-ping` tells you when anything finishes. `vf-ping -- make release` runs the build, then says how it went and how long it took; `vf-ping "the backup is done"` tells you straight away. Away from the PC it calls, at the PC it's a desktop notification; `--call` or `--text` picks one, and with calls switched off it texts.
 
+**PC actions by phone.** Omarchy can run a few things on the PC for you mid-call, but only the ones you list in `~/.config/voice-foreman/actions.json`. It picks one by name and can't pass anything else, so it never runs a command you didn't write. "Lock the PC" is always there. Mark anything risky `"pin": true`: it then only works after you've typed your keypad PIN and # on the call.
+
+```json
+{
+  "VNC status": {"says": "Is VNC on, and who's watching", "command": ["python3", "/home/you/.config/omarchy/plugins/io.github.yassinesawahi.vnc/vnc.py", "status"]},
+  "VNC on":     {"says": "Turn VNC screen sharing on", "command": ["python3", "/home/you/.config/omarchy/plugins/io.github.yassinesawahi.vnc/vnc.py", "on"], "pin": true},
+  "VNC off":    {"says": "Turn VNC off", "command": ["python3", "/home/you/.config/omarchy/plugins/io.github.yassinesawahi.vnc/vnc.py", "off"]}
+}
+```
+
 `tools/probe.py` runs every 3 minutes. It sends the phone a silent SIP OPTIONS, which doesn't ring. If Baresip on the phone has stopped answering and ADB reaches the phone, it restarts the app. A phone locked with a PIN can't be repaired until you unlock it.
 
 Prompts inside sessions can't be answered by voice. `tools/enable-remote-control.sh` starts Remote Control in every new Claude Code session, so you can answer them from the Claude app.

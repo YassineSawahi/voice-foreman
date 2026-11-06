@@ -7,6 +7,8 @@ between the brain and this process. foremand starts it via --mcp-config.
 """
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +18,9 @@ import linebus  # noqa: E402
 
 os.umask(0o077)  # spool notes are private
 SPOOL = Path(os.environ.get("VF_SPOOL", Path.home() / ".local/state/voice-foreman/events"))
+ACTIONS = Path(os.environ.get("VF_ACTIONS", Path.home() / ".config/voice-foreman/actions.json"))
+PIN_OK = Path.home() / ".local/state/voice-foreman/pin_ok"  # foremand writes it when the keypad PIN is right
+BUILT_IN = {"lock the PC": {"says": "Lock the PC and turn its screen off", "command": ["omarchy-system-lock"]}}
 
 TOOLS = [
     {
@@ -35,6 +40,59 @@ TOOLS = [
                                        "description": "What it's about; the callback starts fresh, so say everything needed"}}},
     },
 ]
+
+
+def actions():
+    """The PC actions you set up in actions.json (plus locking the PC, which is always safe):
+    {"name": {"says": "what it does", "command": ["program", "arg"], "pin": true}}.
+    The brain picks one by name and can't pass anything else, so it only ever runs your commands."""
+    found = {k: v for k, v in BUILT_IN.items() if shutil.which(v["command"][0])}
+    try:
+        mine = json.loads(ACTIONS.read_text())
+    except (OSError, ValueError):
+        mine = {}
+    for name, spec in mine.items():
+        if isinstance(spec, dict) and isinstance(spec.get("command"), list) and spec["command"]:
+            found[name] = spec
+    return found
+
+
+def pin_unlocked():
+    try:
+        return json.loads(PIN_OK.read_text()).get("until", 0) > time.time()
+    except (OSError, ValueError):
+        return False
+
+
+def pc_action(name):
+    spec = actions().get(name)
+    if not spec:
+        return f"No PC action called {name!r}. The ones set up: {', '.join(actions()) or 'none'}.", True
+    if spec.get("pin") and not pin_unlocked():
+        return ("Locked: this one needs the keypad PIN. Ask the user to type their PIN and press #, "
+                "then try again."), True
+    try:
+        r = subprocess.run([str(a) for a in spec["command"]], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"Didn't work: {e}", True
+    out = (r.stdout + r.stderr).strip()[-1500:]
+    if r.returncode != 0:
+        return f"Failed (exit code {r.returncode}). {out}".strip(), True
+    return out or "Done.", False
+
+
+def tool_list():
+    """The tools, with pc_action describing whatever actions are set up right now."""
+    found = actions()
+    if not found:
+        return TOOLS
+    lines = [f"- {n}: {s.get('says', n)}" + (" (needs the keypad PIN)" if s.get("pin") else "") for n, s in found.items()]
+    pc = {"name": "pc_action",
+          "description": "Run one of the PC actions the user set up, by name. Returns what it printed.\n" + "\n".join(lines),
+          "inputSchema": {"type": "object", "required": ["name"],
+                          "properties": {"name": {"type": "string", "enum": list(found)}}}}
+    return TOOLS + [pc]
 
 
 def text_phone(message):
@@ -63,7 +121,7 @@ def handle(method, params):
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": TOOLS}
+        return {"tools": tool_list()}
     if method == "tools/call":
         args = params.get("arguments") or {}
         try:
@@ -71,6 +129,8 @@ def handle(method, params):
                 text, is_error = text_phone(args.get("message", ""))
             elif params.get("name") == "call_back":
                 text, is_error = call_back(args.get("minutes", 0), args.get("reason", ""))
+            elif params.get("name") == "pc_action":
+                text, is_error = pc_action(str(args.get("name", "")))
             else:
                 text, is_error = f"No such tool: {params.get('name')}", True
         except (linebus.LineError, OSError, ValueError) as e:
