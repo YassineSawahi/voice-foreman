@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""vf-ping: let Omarchy tell you when something's done, not just Claude Code sessions.
+
+  vf-ping [--call|--text] MESSAGE           tell you now
+  vf-ping [--call|--text] -- COMMAND...     run COMMAND here, then tell you how it went and how long it took
+
+  make release; vf-ping "the release build is done"
+  vf-ping -- rsync -a ~/Photos nas:backup     (its own output still shows as usual)
+
+By default Omarchy calls only when you're away from the PC; at the PC you get a desktop
+notification. --call always calls, --text always texts. With calls switched off it texts.
+Quiet hours hold a call until they end, like any other.
+"""
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+os.umask(0o077)  # the note says what you're working on: yours alone
+SPOOL = Path(os.environ.get("VF_SPOOL", Path.home() / ".local/state/voice-foreman/events"))
+
+
+def took(seconds):
+    if seconds < 90:
+        return f"{seconds:.0f} seconds"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} minutes"
+    return f"{seconds / 3600:.1f} hours"
+
+
+def spool(message, how):
+    SPOOL.mkdir(mode=0o700, parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-Ping.json"
+    (SPOOL / f".{name}").write_text(json.dumps(
+        {"hook_event_name": "Ping", "message": message, "how": how, "at": time.time()}))
+    (SPOOL / f".{name}").rename(SPOOL / name)  # atomic for foremand
+
+
+def main(args):
+    how = "auto"
+    while args and args[0] in ("--call", "--text"):
+        how = args.pop(0)[2:]
+    if args[:1] == ["--"] and len(args) > 1:
+        command = args[1:]
+        start = time.monotonic()
+        try:
+            code = subprocess.call(command)
+        except OSError as e:
+            print(f"vf-ping: couldn't run {command[0]}: {e}", file=sys.stderr)
+            code = 127
+        what = shlex.join(command)
+        what = what if len(what) <= 80 else what[:77] + "..."
+        result = "finished fine" if code == 0 else f"failed (exit code {code})"
+        spool(f"{what} {result} after {took(time.monotonic() - start)}.", how)
+        return code  # so `vf-ping -- make && next-step` still behaves
+    message = " ".join(args).strip()
+    if not message or message.startswith("-"):
+        print(__doc__, file=sys.stderr)
+        return 2
+    spool(message, how)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

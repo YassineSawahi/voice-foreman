@@ -2,7 +2,8 @@
 # End-to-end "it calls you" test, no phone needed: a fake phone (baresip on port 5074,
 # answers by itself, records what it hears) stands in for yours. A synthetic "session finished"
 # note goes into a private spool; foremand on the dev line should dial the fake phone and report it.
-# Needs the speech service and the vf_rx/vf_tx sinks. Usage: tools/calltest.sh
+# Needs the speech service and the vf_rx/vf_tx sinks. Usage: tools/calltest.sh [ping]
+# With "ping", a `vf-ping --call` stands in for the session: a build that finished.
 set -e
 # The dev line takes the same D-Bus name as your real line, so each test runs on a private bus of its own.
 [ -n "$VF_TEST_BUS" ] || VF_TEST_BUS=1 exec dbus-run-session -- sh "$0" "$@"
@@ -48,11 +49,16 @@ VF_STATE="$T/state" VF_NOTIFY=0 VF_CALLS=1 VF_IGNORE_QUIET=1 VF_CALLS_LOG="$T/ca
 FOREMAND=$!
 sleep 2
 
-# 3. A session "finishes".
-cat > "$T/spool/1-Stop.json" <<'EOF'
+if [ "$1" = ping ]; then
+  # 3. A build you were waiting on finishes.
+  VF_SPOOL="$T/spool" "$P/bin/vf-ping" --call -- sh -c "sleep 1; exit 0"
+else
+  # 3. A session "finishes".
+  cat > "$T/spool/1-Stop.json" <<'EOF'
 {"hook_event_name": "Stop", "session_id": "calltest", "cwd": "/home/me/projects/shop-api",
- "last_assistant_message": "Fixed both review comments on item 552 and all 48 tests pass. The pull request is ready for you to merge."}
+   "last_assistant_message": "Fixed both review comments on item 552 and all 48 tests pass. The pull request is ready for you to merge."}
 EOF
+fi
 
 sleep 30
 hangup_on "$T/phone.bus"  # hang up like you would; the recap follows

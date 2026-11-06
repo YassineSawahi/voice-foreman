@@ -109,6 +109,8 @@ tail ~/.local/state/voice-foreman/probe.log            # phone health every 3 mi
 
 Control it from the bar widget, or with `bin/vf-ctl`: `vf-ctl power on|off`, `vf-ctl calls toggle`, `vf-ctl mode always|away`, `vf-ctl call-me`, `vf-ctl desk toggle`, `vf-ctl quiet 22:00-07:00`, `vf-ctl dnd on`, `vf-ctl pin 1234`. With no arguments it prints the state as JSON.
 
+**Not just Claude Code:** `bin/vf-ping` tells you when anything finishes. `vf-ping -- make release` runs the build, then says how it went and how long it took; `vf-ping "the backup is done"` tells you straight away. Away from the PC it calls, at the PC it's a desktop notification; `--call` or `--text` picks one, and with calls switched off it texts.
+
 `tools/probe.py` runs every 3 minutes. It sends the phone a silent SIP OPTIONS, which doesn't ring. If Baresip on the phone has stopped answering and ADB reaches the phone, it restarts the app. A phone locked with a PIN can't be repaired until you unlock it.
 
 Prompts inside sessions can't be answered by voice. `tools/enable-remote-control.sh` starts Remote Control in every new Claude Code session, so you can answer them from the Claude app.
@@ -121,7 +123,7 @@ Prompts inside sessions can't be answered by voice. `tools/enable-remote-control
 | `foremand/` | The call handler: audio bridge, the brain (`claude -p` with read-only tools, plus its own `tools_mcp.py` for texts and callbacks), the line's D-Bus control (`linebus.py`), calling you, the Claude Code hook (`hook.py`), the persona (`prompts/brain.md`) | `.venv`, `vf-foremand.service` |
 | `line/baresip/` | The SIP line: this PC's Tailscale address, port 5060; controlled over D-Bus on your session bus; audio through the `vf_rx`/`vf_tx` virtual devices | `vf-line.service` |
 | `line/baresip-dev/` | A second line for tests, port 5070 | The tests |
-| `bin/` | `vf-ctl` (state and switches), `vf-text` and `vf-callback` (texting and callbacks by hand), and the brain's `vf-session`, `vf-pref`, `vf-stop-session` | |
+| `bin/` | `vf-ctl` (state and switches), `vf-ping` (tell me when anything finishes), `vf-text` and `vf-callback` (texting and callbacks by hand), and the brain's `vf-session`, `vf-pref`, `vf-stop-session` | |
 | `systemd/` | The user units and the PipeWire config for the two virtual audio devices | `tools/install-services.sh` |
 | `tools/` | Installers, `configure-line.sh`, `fetch-models.sh`, `probe.py`, `make_hold_music.py`, `phase1.py` (a bare test call), and the tests | |
 | `sounds/hold.wav` | The waiting music, generated from scratch by `tools/make_hold_music.py` | |
@@ -134,7 +136,7 @@ None of them ring your phone or show notifications. Each uses its own state fold
 
 - `.venv/bin/python tools/bargetest.py`: talking over it, pauses mid-sentence, noises. Offline, takes about a second.
 - `tools/talktest.sh "question"`: a fake caller asks, Omarchy answers, and the answer is transcribed. `TALK_WAV=file.wav` plays a prepared script instead.
-- `tools/calltest.sh`: a fake session finishes and Omarchy calls a fake phone.
+- `tools/calltest.sh`: a fake session finishes and Omarchy calls a fake phone. `tools/calltest.sh ping`: the same for a `vf-ping --call`.
 - `tools/desktest.sh`: desk talks and handoff in both directions, with throwaway audio devices.
 
 The last three need the speech service and the virtual audio devices. They run a real brain, so they use your Claude plan.

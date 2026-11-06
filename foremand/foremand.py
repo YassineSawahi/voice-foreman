@@ -878,6 +878,24 @@ def caller_allowed(uri):
     return sip_host(uri) in (allowed or {sip_host(CONFIG["phone"])})
 
 
+def desktop_notify(title, body, critical=False):
+    """A desktop notification, straight over D-Bus: notify-send would put the text on a command line,
+    where any account on this machine could read it in the process list."""
+    if not CONFIG["notify"]:
+        return
+    from jeepney import DBusAddress, new_method_call
+    from jeepney.io.blocking import open_dbus_connection
+    service = DBusAddress("/org/freedesktop/Notifications", bus_name="org.freedesktop.Notifications",
+                          interface="org.freedesktop.Notifications")
+    hints = {"urgency": ("y", 2 if critical else 1)}
+    try:
+        with open_dbus_connection() as conn:
+            conn.send_and_get_reply(new_method_call(service, "Notify", "susssasa{sv}i",
+                                                    ("Omarchy", 0, "phone", title, body, [], hints, -1)), timeout=3)
+    except Exception as e:  # no notification service: nothing to show it on
+        log(f"notification not shown: {e.__class__.__name__}")
+
+
 def shell(*cmd, timeout=4):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
@@ -914,6 +932,8 @@ def missed_call_text(notes):
             parts.append(f"calling back about: {note.get('reason') or 'what we discussed'}")
         elif note["kind"] == "needs_you":
             parts.append(f"{where} is waiting for you")
+        elif note["kind"] == "ping":
+            parts.append(note.get("message") or "a job finished")
         else:
             last = " ".join((note.get("last_assistant_message") or "").split())
             parts.append(f"{where} finished: {last[:140]}")
@@ -981,6 +1001,9 @@ class Dispatcher:
         if note.get("hook_event_name") in ("Stop", "Notification") and note.get("session_id"):
             self.remember(note)
         calls_on = CONFIG["calls_override"] if CONFIG["calls_override"] is not None else settings()["calls"]
+        if note.get("hook_event_name") == "Ping":  # vf-ping: a job you were waiting on finished
+            self.ping(note, calls_on)
+            return
         if not calls_on:
             log(f"{note.get('hook_event_name')} in {Path(note.get('cwd', '')).name or 'foremand'}: calls are off")
             return
@@ -1015,6 +1038,25 @@ class Dispatcher:
         wait = CONFIG["urgent_wait"] if kind == "needs_you" else CONFIG["batch_wait"]
         self.due = min(self.due or float("inf"), time.monotonic() + wait)
         log(f"event: {kind} in {Path(note.get('cwd', '')).name}; calling in {self.due - time.monotonic():.0f}s")
+
+    def ping(self, note, calls_on):
+        """vf-ping. --text (or calls off): a text. --call: a call. Otherwise a call only when you're away;
+        at the PC it's a desktop notification. Quiet hours hold a call like any other."""
+        message = " ".join(str(note.get("message") or "A job you were waiting on finished.").split())[:300]
+        how = note.get("how") or "auto"
+        if how == "text" or not calls_on:
+            asyncio.create_task(self.line.send("message", f"Omarchy: {message}"))
+            log("ping: texted" + ("" if how == "text" else " (calls are off)"))
+            return
+        if how == "auto" and self.call is None and not self.away.away:
+            asyncio.create_task(asyncio.to_thread(desktop_notify, "Omarchy", message))
+            log("ping: you're at the PC, shown on the desktop")
+            return
+        note["kind"] = "ping"
+        note["message"] = message
+        self.pending.append(note)
+        self.due = min(self.due or float("inf"), time.monotonic() + 2)
+        log("ping: calling you about it")
 
     async def desk(self, action):
         """Start or stop a desk talk. Starting one during a phone call carries that call over."""
@@ -1061,6 +1103,8 @@ class Dispatcher:
                              "Get what you need, then finish the work after they hang up.")
             elif note["kind"] == "needs_you":
                 items.append(f"Session {who} is waiting for the user: {note.get('message') or 'it needs a decision'}.")
+            elif note["kind"] == "ping":
+                items.append(f"Something the user was waiting on (vf-ping): {note.get('message')}")
             else:
                 last = " ".join((note.get("last_assistant_message") or "").split())
                 items.append(f"Session {who} finished. Its last message: \"{last[:700]}\"")
@@ -1209,9 +1253,7 @@ async def main():
                 log(f"call {call_id}: refused a caller that isn't your phone: {peer}")
                 await line.send("callfind", call_id)
                 await line.send("hangup", "scode=403 reason=Forbidden")
-                if CONFIG["notify"]:
-                    asyncio.create_task(asyncio.to_thread(
-                        shell, "notify-send", "-u", "critical", "Omarchy", f"Refused a call from {peer}"))
+                asyncio.create_task(asyncio.to_thread(desktop_notify, "Omarchy", f"Refused a call from {peer}", True))
             continue
         if kind == "CALL_CLOSED" and call_id in refused:
             refused.discard(call_id)
