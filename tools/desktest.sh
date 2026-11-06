@@ -6,24 +6,33 @@
 #   B  a fake caller says "move this to my PC": the talk carries over to the desk, then goodbye
 # Needs the speech service and the vf_rx/vf_tx sinks. Usage: tools/desktest.sh [A|B]
 set -e
+# The dev line takes the same D-Bus name as your real line, so each test runs on a private bus of its own.
+[ -n "$VF_TEST_BUS" ] || VF_TEST_BUS=1 exec dbus-run-session -- sh "$0" "$@"
 P=$(cd "$(dirname "$0")/.." && pwd)
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
 T=$HOME/.cache/vf-tmp/desktest
 WHICH=${1:-AB}
-rm -rf "$T" && mkdir -p "$T"
+rm -rf "$T" && mkdir -p -m 700 "$T"
 
 SINK0=$(pactl get-default-sink); SOURCE0=$(pactl get-default-source)
 MIC=$(pactl load-module module-null-sink sink_name=vf_test_mic sink_properties=device.description=vf-test-mic)
 SPK=$(pactl load-module module-null-sink sink_name=vf_test_spk sink_properties=device.description=vf-test-speakers)
 PIDS=""
 cleanup() {
-  kill $PIDS 2>/dev/null || true
+  for p in $PIDS; do pkill -P "$p" 2>/dev/null; done; kill $PIDS 2>/dev/null || true
   pactl unload-module "$MIC" 2>/dev/null; pactl unload-module "$SPK" 2>/dev/null
   pactl set-default-sink "$SINK0"; pactl set-default-source "$SOURCE0"  # never leave your audio moved
 }
 trap cleanup EXIT
+own_bus() {  # own_bus <bus file> <command...>: a fake gets a private D-Bus of its own (the dev line holds the test's)
+  f=$1; shift
+  dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" > "$0"; exec "$@"' "$f" "$@"
+}
+hangup_on() {  # hangup_on <bus file>: that fake hangs up, as you would on the phone
+  DBUS_SESSION_BUS_ADDRESS=$(cat "$1") busctl --user call com.github.Baresip /baresip com.github.Baresip invoke s hangup >/dev/null
+}
 
 tts() { curl -sf -X POST 127.0.0.1:8765/tts -H 'Content-Type: application/json' -d "{\"text\": \"$1\"}" -o "$2"; }
 say() {  # speak into the fake desk microphone
@@ -45,7 +54,7 @@ start_line_and_foremand() {  # $1 extra env
   PIDS="$PIDS $!"
   sleep 1
   env VF_STATE="$S/state" VF_SPOOL="$S/spool" VF_CALLS_LOG="$S/calls.jsonl" VF_NOTIFY=0 VF_CALLS=1 \
-    VF_IGNORE_QUIET=1 VF_CTRL=127.0.0.1:4445 VF_PHONE=sip:phone@$ADDR:5074 \
+    VF_IGNORE_QUIET=1 VF_PHONE=sip:phone@$ADDR:5074 \
     VF_ALLOWED_CALLERS=$ADDR VF_DESK_SOURCE=vf_test_mic.monitor VF_DESK_SINK=vf_test_spk $1 \
     "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$S/foremand.log" 2>&1 &
   PIDS="$PIDS $!"
@@ -59,8 +68,7 @@ fake_baresip() {  # fake_baresip <dir> <port> <rtp base> <mic wav> <account line
     -e "s|^rtp_ports\s.*|rtp_ports\t\t$3-$(($3 + 19))|" \
     -e "s|^audio_source\s.*|audio_source\t\taufile,$4|" \
     -e "s|^audio_player\s.*|audio_player\t\taufile,$1/heard.wav|" \
-    -e "s|^audio_alert\s.*|audio_alert\t\taufile,$1/alert.wav|" \
-    -e 's|^module_app\s+ctrl_tcp\.so|#module_app\t\tctrl_tcp.so|' "$1/config"
+    -e "s|^audio_alert\s.*|audio_alert\t\taufile,$1/alert.wav|" "$1/config"
   echo "$5" > "$1/accounts"; touch "$1/contacts"
 }
 desk_heard() {
@@ -84,7 +92,7 @@ case "$WHICH" in *A*)
   tts "Hello?" "$S/hello.raw"
   ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$S/hello.raw" -af "adelay=1500,apad=pad_dur=60" -ar 48000 "$S/phone-mic.wav"
   fake_baresip "$S/phone" 5074 43000 "$S/phone-mic.wav" "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2"
-  baresip -f "$S/phone" -T -c -t 200 > "$S/phone.log" 2>&1 &
+  own_bus "$S/phone.bus" baresip -f "$S/phone" -T -c -t 200 > "$S/phone.log" 2>&1 &
   PIDS="$PIDS $!"
   start_line_and_foremand ""
   desk_heard
@@ -95,10 +103,10 @@ case "$WHICH" in *A*)
   say "Thanks. I'm heading out, call me on my phone."
   wait_for "calling you to carry on" 1 40; wait_for "call [0-9a-f]+: desk" 1 30
   sleep 4; settle
-  curl -s -o /dev/null "http://127.0.0.1:8001/?%2Fhangup"   # you hang up the phone
+  hangup_on "$S/phone.bus"   # you hang up the phone
   wait_for "recap texted|recap kept|no recap" 1 150
   report A
-  kill $PIDS 2>/dev/null || true; sleep 1
+  for p in $PIDS; do pkill -P "$p" 2>/dev/null; done; kill $PIDS 2>/dev/null || true; sleep 1
 ;; esac
 
 case "$WHICH" in *B*)
@@ -109,7 +117,7 @@ case "$WHICH" in *B*)
   fake_baresip "$S/caller" 5072 42000 "$S/caller-mic.wav" "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2"
   start_line_and_foremand ""
   desk_heard
-  baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:claude@$ADDR:5070" > "$S/caller.log" 2>&1 &
+  own_bus "$S/caller.bus" baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:claude@$ADDR:5070" > "$S/caller.log" 2>&1 &
   PIDS="$PIDS $!"
   wait_for "phone leg closed" 1 60; settle
   say "What day is it today?"

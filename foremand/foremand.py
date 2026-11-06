@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """foremand: the voice foreman's call handler (Phase 2: the talk loop).
 
-Owns one baresip line through ctrl_tcp. While a call is up it bridges the call audio
+Owns one baresip line through D-Bus (foremand/linebus.py: baresip's ctrl_dbus on your session
+bus, so no other account on this machine can drive it). While a call is up it bridges the call audio
 to the speech service and a Claude brain:
 
   you    -> baresip -> vf_rx sink -> parec -> speech /listen (VAD + whisper) -> brain
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.request
 import wave
@@ -24,9 +26,12 @@ from pathlib import Path
 import numpy as np
 import websockets
 
+import linebus
+
+os.umask(0o077)  # logs, transcripts, recaps and state are yours alone
+
 PROJECT = Path(__file__).resolve().parent.parent
 CONFIG = {
-    "ctrl": os.environ.get("VF_CTRL", "127.0.0.1:4444"),
     "speech": os.environ.get("VF_SPEECH", "127.0.0.1:8765"),
     "rx_source": os.environ.get("VF_RX_SOURCE", "vf_rx.monitor"),
     "tx_sink": os.environ.get("VF_TX_SINK", "vf_tx"),
@@ -79,7 +84,7 @@ READ_ONLY_COMMANDS = [
     "claude agents", "claude logs", "omarchy version",
 ]
 BRAIN_ALLOWED = (["Read", "ListAgents", "SendMessage", "WebSearch", "Bash(cd *)", "Bash(claude --bg *)",
-                  f"Bash({PROJECT}/bin/vf-callback *)", f"Bash({PROJECT}/bin/vf-text *)",
+                  "mcp__vf__text_phone", "mcp__vf__call_back",
                   f"Bash({PROJECT}/bin/vf-session *)", f"Bash({PROJECT}/bin/vf-pref *)",
                   f"Bash({PROJECT}/bin/vf-stop-session *)"]
                  + [f"Bash({c})" for c in READ_ONLY_COMMANDS]
@@ -162,10 +167,10 @@ DISPATCHER = None  # set in main(); a conversation uses it to end a desk talk or
 AFTER_CALL = (
     "[call ended] The user hung up. If you told them you'd do something after the call (look something up, "
     "write a report, hand work to a session), or the call ended while you were still answering them, do it now "
-    "with your tools and text them the result or answer with vf-text (short, plain text). The recap must only say "
+    "with your tools and text them the result or answer with the text_phone tool (short, plain text). The recap must only say "
     "what really happened on the call. Then end with a short recap of the call for their phone as your final reply: two to "
     "four lines, plain text, starting with \"Omarchy:\". It's texted to them automatically and kept as your memory "
-    "of the call. If your vf-text messages already covered everything, start it with \"SKIP \" so it's kept but "
+    "of the call. If your text_phone messages already covered everything, start it with \"SKIP \" so it's kept but "
     "not texted again.")
 TAG = re.compile(r"<[^>]*>")
 CODE = re.compile(r"[<>]|=\"|\$\(|&&|\||`|~/|/dev/|\bname=\"|^\s*[{\[]|[{}]")
@@ -184,7 +189,7 @@ def log(msg):
     msg = " ".join(str(msg).split("\n"))  # session messages can hold newlines; keep one line per entry
     line = f"{datetime.now():%H:%M:%S.%f}"[:-3] + f" {msg}"
     print(line, flush=True)
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(f"{datetime.now():%Y-%m-%d} {line}\n")
 
@@ -373,7 +378,15 @@ class Brain:
         self.replays = False  # seen an echo (if this claude never echoes, replies are counted instead)
 
     async def start(self):
-        cmd = ["claude", "-p", "--safe-mode", "--no-session-persistence", "--name", BRAIN_NAME,
+        # Isolated from your own Claude Code setup: no settings files (so none of your hooks, plugins or
+        # permission rules), no CLAUDE.md or auto-memory, no skills; only its own tools server.
+        # (--safe-mode would also drop that server.) The server inherits this env, D-Bus address included.
+        tools = {"mcpServers": {"vf": {"type": "stdio", "command": sys.executable,
+                                        "args": ["-I", str(PROJECT / "foremand/tools_mcp.py")],
+                                        "env": {"VF_SPOOL": str(SPOOL)}}}}
+        cmd = ["claude", "-p", "--setting-sources", "", "--settings", json.dumps({"autoMemoryEnabled": False}),
+               "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", json.dumps(tools),
+               "--no-session-persistence", "--name", BRAIN_NAME,
                "--model", CONFIG["model"], "--effort", CONFIG["effort"],
                "--fallback-model", CONFIG["fallback"],
                "--tools", BRAIN_TOOLS, "--permission-mode", "dontAsk",
@@ -517,7 +530,7 @@ class Call:
 
     def on_key(self, key):
         """Keypad: 1 repeats the last answer, 0 stops talking, 9 hangs up; digits then # enter the PIN."""
-        log(f"  key: {key}")
+        log("  key: digit" if key.isdigit() else f"  key: {key}")  # never the digits: the PIN is typed here
         if key == "#":
             pin = settings().get("pin")
             entered = self.digits
@@ -971,7 +984,7 @@ class Dispatcher:
         if not calls_on:
             log(f"{note.get('hook_event_name')} in {Path(note.get('cwd', '')).name or 'foremand'}: calls are off")
             return
-        if note.get("hook_event_name") == "Callback":  # "call me back in 20 minutes" (vf-callback)
+        if note.get("hook_event_name") == "Callback":  # "call me back in 20 minutes" (the call_back tool, vf-callback)
             minutes = float(note["minutes"]) if note.get("minutes") is not None else 10.0  # 0 = now
             due = time.monotonic() + 60 * minutes
             note["kind"] = "callback"
@@ -1160,34 +1173,29 @@ class Dispatcher:
 
 # --------------------------------------------------------------------------- the line
 
-class Line:
-    """baresip ctrl_tcp: netstring-framed JSON commands and events."""
-
-    async def connect(self):
-        host, port = CONFIG["ctrl"].split(":")
-        self.reader, self.writer = await asyncio.open_connection(host, int(port))
+class Line(linebus.Line):
+    """The baresip line over D-Bus (see linebus.py). A command the line can't take (it's down or
+    restarting) is logged by name, never with its text, and the call carries on."""
 
     async def send(self, command, params=""):
-        msg = json.dumps({"command": command, "params": params, "token": command}).encode()
-        self.writer.write(b"%d:%s," % (len(msg), msg))
-        await self.writer.drain()
-
-    async def events(self):
-        while True:
-            n = int((await self.reader.readuntil(b":"))[:-1])
-            payload = await self.reader.readexactly(n)
-            await self.reader.readexactly(1)  # trailing comma
-            yield json.loads(payload)
+        try:
+            return await super().send(command, params)
+        except linebus.LineError as e:
+            log(f"line: {command} didn't go through: {e}")
+            return ""
 
 
 async def main():
     global DISPATCHER
+    for folder in {STATE, CALLS_LOG.parent, SPOOL.parent}:  # an older install made these readable by all
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        folder.chmod(0o700)
     line = Line()
     await line.connect()
     dispatcher = DISPATCHER = Dispatcher(line)
     if os.environ.get("VF_DISPATCH", "1") != "0":  # tests turn it off to leave the real spool alone
         asyncio.create_task(dispatcher.run())
-    log(f"foremand ready on line {CONFIG['ctrl']}, brain {CONFIG['model']} ({CONFIG['effort']})")
+    log(f"foremand ready on the line (D-Bus), brain {CONFIG['model']} ({CONFIG['effort']})")
     calls, refused = {}, set()
     async for ev in line.events():
         kind, call_id = ev.get("type"), ev.get("id")

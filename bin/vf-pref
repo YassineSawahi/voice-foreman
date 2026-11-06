@@ -5,9 +5,11 @@ mute: never call about it. text: text instead of calling when it finishes. call:
 (even in away-only mode). clear: back to the default. With no arguments, lists them.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
+os.umask(0o077)
 PREFS = Path.home() / ".config/voice-foreman/prefs.json"
 try:
     prefs = json.loads(PREFS.read_text())
@@ -19,7 +21,7 @@ if len(sys.argv) == 3 and sys.argv[2] in ("mute", "text", "call", "clear"):
         prefs.pop(word, None)
     else:
         prefs[word] = sys.argv[2]
-    PREFS.parent.mkdir(parents=True, exist_ok=True)
+    PREFS.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     PREFS.write_text(json.dumps(prefs, indent=1))
 elif len(sys.argv) != 1:
     sys.exit(__doc__)

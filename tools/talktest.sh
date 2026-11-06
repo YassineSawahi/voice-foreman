@@ -4,13 +4,22 @@
 # transcribes the recording. Needs the speech service up (docker compose up -d speech) and the
 # vf_rx/vf_tx sinks. Usage: tools/talktest.sh ["question text"]
 set -e
+# The dev line takes the same D-Bus name as your real line, so each test runs on a private bus of its own.
+[ -n "$VF_TEST_BUS" ] || VF_TEST_BUS=1 exec dbus-run-session -- sh "$0" "$@"
 P=$(cd "$(dirname "$0")/.." && pwd)
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
 T=$HOME/.cache/vf-tmp/talktest
 QUESTION=${1:-"Hi Claude. What is two plus two?"}
-rm -rf "$T" && mkdir -p "$T/caller"
+rm -rf "$T" && mkdir -p -m 700 "$T" && mkdir -p "$T/caller"
+own_bus() {  # own_bus <bus file> <command...>: a fake gets a private D-Bus of its own (the dev line holds the test's)
+  f=$1; shift
+  dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" > "$0"; exec "$@"' "$f" "$@"
+}
+hangup_on() {  # hangup_on <bus file>: that fake hangs up, as you would on the phone
+  DBUS_SESSION_BUS_ADDRESS=$(cat "$1") busctl --user call com.github.Baresip /baresip com.github.Baresip invoke s hangup >/dev/null
+}
 
 # 1. The question as audio: 6 s of silence (Claude greets first), the question, then room to answer.
 if [ -n "$TALK_WAV" ]; then cp "$TALK_WAV" "$T/question.wav"  # a prepared script of what the caller says
@@ -28,8 +37,7 @@ sed -i -E \
   -e 's|^rtp_ports\s.*|rtp_ports\t\t42000-42019|' \
   -e "s|^audio_source\s.*|audio_source\t\taufile,$T/question.wav|" \
   -e "s|^audio_player\s.*|audio_player\t\taufile,$T/answer.wav|" \
-  -e "s|^audio_alert\s.*|audio_alert\t\taufile,$T/alert.wav|" \
-  -e 's|^module_app\s+ctrl_tcp\.so|#module_app\t\tctrl_tcp.so|' "$T/caller/config"
+  -e "s|^audio_alert\s.*|audio_alert\t\taufile,$T/alert.wav|" "$T/caller/config"
 echo "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2" > "$T/caller/accounts"
 touch "$T/caller/contacts"
 
@@ -37,10 +45,10 @@ touch "$T/caller/contacts"
 baresip -f "$P/line/baresip-dev" -T -c > "$T/line.log" 2>&1 &
 LINE=$!
 sleep 1
-VF_ALLOWED_CALLERS=${VF_ALLOWED_CALLERS:-$ADDR} VF_DISPATCH=0 VF_SPOOL="$T/spool" VF_STATE="$T/state" VF_NOTIFY=0 VF_CALLS=1 VF_IGNORE_QUIET=1 VF_CALLS_LOG="$T/calls.jsonl" VF_CTRL=127.0.0.1:4445 "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$T/foremand.log" 2>&1 &
+VF_ALLOWED_CALLERS=${VF_ALLOWED_CALLERS:-$ADDR} VF_DISPATCH=0 VF_SPOOL="$T/spool" VF_STATE="$T/state" VF_NOTIFY=0 VF_CALLS=1 VF_IGNORE_QUIET=1 VF_CALLS_LOG="$T/calls.jsonl" "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$T/foremand.log" 2>&1 &
 FOREMAND=$!
 sleep 1
-baresip -f "$T/caller" -T -c -t 30 -e "/dial sip:claude@$ADDR:5070" > "$T/caller.log" 2>&1 || true
+own_bus "$T/caller.bus" baresip -f "$T/caller" -T -c -t 30 -e "/dial sip:claude@$ADDR:5070" > "$T/caller.log" 2>&1 || true
 # after the hang-up Omarchy may still be working on what it promised; wait for the recap (up to 3 min)
 for i in $(seq 1 180); do grep -qE "recap texted|recap skipped|no recap|ran out of time|refused a caller" "$T/foremand.log" && break; sleep 1; done
 kill $FOREMAND $LINE 2>/dev/null || true

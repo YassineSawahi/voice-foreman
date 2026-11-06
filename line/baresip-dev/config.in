@@ -89,7 +89,7 @@ module_path		/usr/lib/baresip/modules
 #module			stdio.so
 #module			cons.so
 #module			evdev.so
-module			httpd.so
+#module			httpd.so
 
 # Audio codec Modules (in order)
 module			opus.so
@@ -177,8 +177,8 @@ module_app		menu.so
 #module_app		serreg.so
 #module_app		syslog.so
 #module_app		mqtt.so
-module_app		ctrl_tcp.so
-#module_app		ctrl_dbus.so
+#module_app		ctrl_tcp.so
+module_app		ctrl_dbus.so	# control: D-Bus on your session bus (foremand/linebus.py)
 #module_app		httpreq.so
 module_app		netroam.so
 
@@ -191,12 +191,6 @@ module_app		netroam.so
 
 
 # UI Modules parameters
-cons_listen		0.0.0.0:5555 # cons - Console UI UDP/TCP sockets
-
-http_listen		127.0.0.1:8001 # dev line: tests hang up through here
-
-ctrl_tcp_listen		127.0.0.1:4445
-
 evdev_device		/dev/input/event0
 
 # Opus codec parameters
@@ -264,7 +258,7 @@ gtk_use_window	yes
 #vp8_enc_cpuused 16 # range -16..16, greater 0 increases speed over quality
 
 # ctrl_dbus
-#ctrl_dbus_use	system		# system, session
+ctrl_dbus_use	session		# only processes running as you can reach it
 
 # mqtt
 #mqtt_broker_host	sollentuna.example.com

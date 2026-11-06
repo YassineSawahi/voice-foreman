@@ -7,7 +7,10 @@ set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 U=$HOME/.config/systemd/user
 PW=$HOME/.config/pipewire/pipewire-pulse.conf.d
-mkdir -p "$U" "$PW" "$HOME/.local/state/voice-foreman"
+mkdir -p "$U" "$PW"
+# State, logs and settings hold transcripts, recaps and the keypad PIN: yours alone.
+mkdir -p -m 700 "$HOME/.local/state/voice-foreman" "$HOME/.config/voice-foreman"
+chmod 700 "$HOME/.local/state/voice-foreman" "$HOME/.config/voice-foreman"
 
 echo "1/5 writing the line config"
 sh "$P/tools/configure-line.sh"
@@ -41,5 +44,5 @@ ln -sf "$P/bin/vf-ctl" "$HOME/.local/bin/vf-ctl"
 echo "5/5 checking"
 sleep 4
 systemctl --user --no-pager --no-legend list-units 'vf-*'
-python3 -I "$P/tools/probe.py" || true
+"$P/.venv/bin/python" -I "$P/tools/probe.py" || true
 tail -1 "$HOME/.local/state/voice-foreman/foremand.log" 2>/dev/null || true

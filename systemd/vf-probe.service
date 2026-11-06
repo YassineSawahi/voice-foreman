@@ -2,6 +2,8 @@
 Description=Voice foreman: silent check that the phone's Baresip answers
 
 [Service]
+# logs and state hold transcripts and call recaps: yours alone
+UMask=0077
 Type=oneshot
 EnvironmentFile=-%h/.config/voice-foreman/env
-ExecStart=/usr/bin/python3 -I {{PROJECT}}/tools/probe.py
+ExecStart={{PROJECT}}/.venv/bin/python -I {{PROJECT}}/tools/probe.py

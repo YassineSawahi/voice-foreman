@@ -4,9 +4,11 @@
 Installed in ~/.claude/settings.json as an async hook, so it never blocks a session.
 Writes one JSON file per event into ~/.local/state/voice-foreman/events/, which
 foremand picks up and deletes. Always exits 0, even if something goes wrong.
-The phone brain runs with --safe-mode, which skips hooks, so it never reports itself.
+The phone brain loads no settings files (--setting-sources ""), so these hooks never run for it
+and it never reports itself.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,7 +29,8 @@ def main():
     if isinstance(note.get("last_assistant_message"), str):
         note["last_assistant_message"] = note["last_assistant_message"][-4000:]
     note["at"] = time.time()
-    SPOOL.mkdir(parents=True, exist_ok=True)
+    os.umask(0o077)  # notes hold what your sessions said: yours alone
+    SPOOL.mkdir(mode=0o700, parents=True, exist_ok=True)
     name = f"{time.time_ns()}-{note.get('hook_event_name', 'event')}.json"
     tmp = SPOOL / f".{name}"
     tmp.write_text(json.dumps(note))

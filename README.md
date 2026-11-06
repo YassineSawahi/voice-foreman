@@ -19,6 +19,30 @@ The bar widget for [Omarchy](https://omarchy.org) is a separate repo: [omarchy-v
 - **Phone or PC.** Talk at the PC through its mic and speakers. "Move to my PC" on a call carries the conversation to the desk; "call me" at the desk carries it back to the phone.
 - **Only your phone gets in.** Any other caller is hung up before the brain starts, logged, and shown as a desktop notification. Your tailnet policy is the first lock.
 
+## How it works
+
+Your phone runs only the Baresip app. Everything else runs on your PC as systemd user units: the line, the speech service, foremand and the phone check.
+
+**Over Tailscale.** The line is baresip, listening only on your PC's Tailscale address. Baresip on the phone does the same. Calls (SIP) and their audio (RTP) go straight between the two across your tailnet, so they work at home or away, with no phone number, no SIP provider and no port opened to the internet. Your tailnet policy decides who reaches which port. Recaps and missed-call texts are SIP messages on the same path, shown in Baresip's chat.
+
+**On the PC.** foremand controls the line over D-Bus on your session bus (baresip's `ctrl_dbus` module): it dials, hangs up, and hears incoming calls and keypad presses. There's no control port: only processes running as you can reach your session bus. Call audio goes through two virtual PipeWire devices. foremand takes your voice from `vf_rx` and streams it to the speech service, a Docker container on your GPU, where Silero hears when you've stopped and Whisper writes it down. The brain, `claude -p` on your own Claude login, answers a sentence at a time. It texts you and books callbacks through two tools of its own (`foremand/tools_mcp.py`). Kokoro speaks each one, and foremand plays it, over the waiting music, into `vf_tx` for baresip to send. At the desk, the PC's mic and speakers stand in for both devices.
+
+**How a session calls you.** Three Claude Code hooks (Stop, Notification, UserPromptSubmit) run `foremand/hook.py`, which drops the event as a small JSON file into a spool folder, so a session never waits on it. foremand reads the folder every second, waits 10 s (a session needs you) or 90 s (finished), drops the call if you reply at the keyboard, checks quiet hours, Do Not Disturb and whether you're away, then dials. The bar's `vf-ctl` uses the same spool.
+
+**The phone check.** Every 3 minutes a silent SIP OPTIONS checks that Baresip answers. If not, and ADB reaches the phone, the app is restarted.
+
+```text
+ YOUR PHONE                           YOUR PC
+ Baresip app <== SIP + RTP ===> baresip line (on the PC's Tailscale address)
+             over Tailscale only    |  ^  audio: vf_rx / vf_tx
+                                    |  |  control: D-Bus, session bus
+                                    v  |
+ Claude Code --hooks--> spool --> foremand <--> speech (Docker, GPU):
+ sessions               folder      |  ^        Silero, Whisper, Kokoro
+                                    v  |
+                              brain: claude -p, your Claude login
+```
+
 ## What you need
 
 - A Linux PC with an NVIDIA GPU, Docker with the NVIDIA container toolkit, PipeWire, `baresip`, `ffmpeg`, `jq` and Python 3.
@@ -31,7 +55,7 @@ The bar widget for [Omarchy](https://omarchy.org) is a separate repo: [omarchy-v
 
 ```sh
 git clone https://github.com/YassineSawahi/voice-foreman.git && cd voice-foreman
-python3 -m venv .venv && .venv/bin/pip install numpy websockets
+python3 -m venv .venv && .venv/bin/pip install numpy websockets jeepney
 sh tools/fetch-models.sh                  # the Kokoro voice, ~350 MB
 docker compose build speech
 ```
@@ -94,10 +118,10 @@ Prompts inside sessions can't be answered by voice. `tools/enable-remote-control
 | Path | What | Runs |
 |---|---|---|
 | `speech/` | Speech to text (faster-whisper large-v3-turbo), the voice (Kokoro `af_heart`), end-of-speech detection (Silero), on the GPU | Docker (`compose.yaml`), `vf-speech.service` |
-| `foremand/` | The call handler: audio bridge, the brain (`claude -p` with read-only tools), calling you, the Claude Code hook (`hook.py`), the persona (`prompts/brain.md`) | `.venv`, `vf-foremand.service` |
-| `line/baresip/` | The SIP line: this PC's Tailscale address, port 5060; local control on 4444 and 8000; audio through the `vf_rx`/`vf_tx` virtual devices | `vf-line.service` |
-| `line/baresip-dev/` | A second line for tests, port 5070; local control on 4445 and 8001 | The tests |
-| `bin/` | `vf-ctl` (state and switches), `vf-text`, `vf-callback`, `vf-session`, `vf-pref`, `vf-stop-session` (the brain's tools) | |
+| `foremand/` | The call handler: audio bridge, the brain (`claude -p` with read-only tools, plus its own `tools_mcp.py` for texts and callbacks), the line's D-Bus control (`linebus.py`), calling you, the Claude Code hook (`hook.py`), the persona (`prompts/brain.md`) | `.venv`, `vf-foremand.service` |
+| `line/baresip/` | The SIP line: this PC's Tailscale address, port 5060; controlled over D-Bus on your session bus; audio through the `vf_rx`/`vf_tx` virtual devices | `vf-line.service` |
+| `line/baresip-dev/` | A second line for tests, port 5070 | The tests |
+| `bin/` | `vf-ctl` (state and switches), `vf-text` and `vf-callback` (texting and callbacks by hand), and the brain's `vf-session`, `vf-pref`, `vf-stop-session` | |
 | `systemd/` | The user units and the PipeWire config for the two virtual audio devices | `tools/install-services.sh` |
 | `tools/` | Installers, `configure-line.sh`, `fetch-models.sh`, `probe.py`, `make_hold_music.py`, `phase1.py` (a bare test call), and the tests | |
 | `sounds/hold.wav` | The waiting music, generated from scratch by `tools/make_hold_music.py` | |
@@ -106,7 +130,7 @@ The line configs are written from the `.in` templates by `tools/configure-line.s
 
 ## Tests
 
-None of them ring your phone or show notifications, and each uses its own state folder.
+None of them ring your phone or show notifications. Each uses its own state folder and its own private D-Bus (`dbus-run-session`), so it never touches your running line.
 
 - `.venv/bin/python tools/bargetest.py`: talking over it, pauses mid-sentence, noises. Offline, takes about a second.
 - `tools/talktest.sh "question"`: a fake caller asks, Omarchy answers, and the answer is transcribed. `TALK_WAV=file.wav` plays a prepared script instead.
@@ -118,6 +142,16 @@ The last three need the speech service and the virtual audio devices. They run a
 ## Configuration
 
 Everything is a `VF_*` environment variable, read from `~/.config/voice-foreman/env` by the services. The full list with defaults is `CONFIG` at the top of `foremand/foremand.py`. The persona is `foremand/prompts/brain.md`: tell it there how you like to be addressed.
+
+## Privacy
+
+Calls go between your phone and your PC over Tailscale and nowhere else. Speech is heard and spoken on your own GPU, and only the brain's conversation goes to Claude, on your own login. On the PC, other accounts can't read or drive any of it:
+
+- Logs, transcripts, call recaps, the spool and settings (keypad PIN included) live in `~/.local/state/voice-foreman` and `~/.config/voice-foreman`, readable by you alone. Keypad digits are never logged.
+- The line is controlled over D-Bus on your session bus, which only your own processes can reach. There is no TCP control port.
+- The brain texts you and books callbacks through its own tools, so what it writes never sits on a command line. Commands it runs through Bash (`git log`, starting a session) show in the process list, as any command does.
+- The brain runs apart from your own Claude Code setup: no settings files, hooks, plugins, CLAUDE.md or auto-memory.
+- The speech service listens on `127.0.0.1:8765`. Another account on the PC could use it, and your GPU, for its own audio, but it can't hear your calls.
 
 ## Remove
 

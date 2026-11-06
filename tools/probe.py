@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Silent health probe: is the phone's Baresip reachable right now?
 
-Sends a SIP OPTIONS (no ringing) through the baresip line's httpd module, then
+Sends a SIP OPTIONS (no ringing) through the baresip line (over D-Bus, see foremand/linebus.py), then
 looks for the phone's "200 OK" in the line's log. Appends one line per run to
 ~/.local/state/voice-foreman/probe.log, e.g.
 
@@ -15,10 +15,13 @@ import re
 import subprocess
 import sys
 import time
-import urllib.parse
-import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "foremand"))
+import linebus  # noqa: E402
+
+os.umask(0o077)  # the probe log and phone-log excerpts are yours alone
 
 # From ~/.config/voice-foreman/env (vf-probe.service loads it): VF_PHONE is your phone's SIP
 # address; VF_PHONE_ADB lists the ADB addresses to try, comma-separated (default: its tailnet one).
@@ -33,23 +36,23 @@ PROBE_LOG = Path.home() / ".local/state/voice-foreman/probe.log"
 def sip_options(timeout=4.0):
     """Return the reply time in ms if the phone answered 200 OK, else None.
 
-    Goes through baresip's httpd module (127.0.0.1:8000), because ctrl_tcp takes only one
-    client and foremand holds it. The command needs its long form ("/options"), fully
-    percent-encoded.
+    Asks the line over D-Bus (linebus.py), next to foremand; the answer shows up in the line's log.
     """
     start = LINE_LOG.stat().st_size
-    query = urllib.parse.quote(f"/options {PHONE_URI}", safe="")
     t0 = time.monotonic()
-    with urllib.request.urlopen(f"http://127.0.0.1:8000/?{query}", timeout=2):
-        while time.monotonic() - t0 < timeout:
-            time.sleep(0.05)
-            with LINE_LOG.open("rb") as f:
-                f.seek(start)
-                new = f.read().decode(errors="replace")
-            _, _, rest = new.partition(f"OPTIONS of {PHONE_URI}")
-            if "\n" in rest:
-                status = rest.split("\n", 2)[1]
-                return round((time.monotonic() - t0) * 1000) if " 200 " in status else None
+    try:
+        linebus.invoke("options", PHONE_URI, timeout=2)
+    except linebus.LineError as e:  # the line isn't running
+        raise OSError(e) from e
+    while time.monotonic() - t0 < timeout:
+        time.sleep(0.05)
+        with LINE_LOG.open("rb") as f:
+            f.seek(start)
+            new = f.read().decode(errors="replace")
+        _, _, rest = new.partition(f"OPTIONS of {PHONE_URI}")
+        if "\n" in rest:
+            status = rest.split("\n", 2)[1]
+            return round((time.monotonic() - t0) * 1000) if " 200 " in status else None
     return None
 
 
@@ -89,7 +92,7 @@ def save_crash_log(serial):
             if "baresip" in l.lower() or "FATAL" in l or "AndroidRuntime" in l or "lowmemorykiller" in l.lower()]
     if keep:
         out = PROBE_LOG.parent / "phone-logs" / f"{datetime.now():%Y%m%d-%H%M%S}.log"
-        out.parent.mkdir(parents=True, exist_ok=True)
+        out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         out.write_text("\n".join(keep[-400:]) + "\n")
 
 
@@ -167,7 +170,7 @@ def main():
                 ms = sip_options()
                 line += f" repaired={'yes' if ms is not None else 'failed'}"
     line += f" path={tailscale_path()} app={app_state()}"
-    PROBE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    PROBE_LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with PROBE_LOG.open("a") as f:
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {line}\n")
     print(line)

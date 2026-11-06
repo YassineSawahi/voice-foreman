@@ -3,48 +3,64 @@
 
 Usage: phase1.py [SIP-URI] [--hold SECONDS] [--ring-timeout SECONDS]
 
-Talks to baresip's ctrl_tcp on 127.0.0.1:4444 (netstring-framed JSON),
+Talks to the line over D-Bus (foremand/linebus.py; run it with the project's .venv python),
 prints every call event and appends it to ~/.local/state/voice-foreman/phase1.log.
 Exits 0 when the call was answered, 1 otherwise.
 """
 import argparse
-import json
+import asyncio
 import os
-import socket
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-CTRL = ("127.0.0.1", 4444)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "foremand"))
+import linebus  # noqa: E402
+
+os.umask(0o077)
 LOG = Path.home() / ".local/state/voice-foreman/phase1.log"
 
 
-class Ctrl:
-    """Minimal ctrl_tcp client: send commands, read responses and events."""
-
-    def __init__(self, addr):
-        self.sock = socket.create_connection(addr, timeout=0.5)
-        self.buf = b""
-
-    def send(self, command, params=""):
-        msg = json.dumps({"command": command, "params": params, "token": command}).encode()
-        self.sock.sendall(b"%d:%s," % (len(msg), msg))
-
-    def recv(self):
-        """Return the next message, or None if nothing arrived within the timeout."""
-        while True:
-            head, sep, rest = self.buf.partition(b":")
-            if sep and len(rest) > int(head):
-                n = int(head)
-                self.buf = rest[n + 1:]  # drop the trailing comma
-                return json.loads(rest[:n])
-            try:
-                chunk = self.sock.recv(4096)
-            except socket.timeout:
-                return None
-            if not chunk:
-                raise ConnectionError("baresip closed the control socket")
-            self.buf += chunk
+async def call(args, log):
+    line = linebus.Line()
+    await line.connect()
+    log(f"--- dialing {args.uri}")
+    t0 = time.monotonic()
+    reply = (await line.send("dial", args.uri)).strip()
+    log(f"response to dial: {reply}")
+    if "failed" in reply:
+        return None, None, f"dial refused: {reply}"
+    rang = answered = closed = None
+    hung_up = False
+    deadline = args.ring_timeout + args.hold + 30  # never wait forever
+    events = line.events()
+    while closed is None:
+        now = time.monotonic() - t0
+        if not hung_up and answered is None and now > args.ring_timeout:
+            log("no answer in time: hanging up")
+            await line.send("hangup")
+            hung_up = True
+        if not hung_up and answered is not None and now - answered > args.hold:
+            log("hold time over: hanging up")
+            await line.send("hangup")
+            hung_up = True
+        if now > deadline:
+            closed = "gave up waiting for CALL_CLOSED"
+            break
+        try:
+            msg = await asyncio.wait_for(anext(events), 0.5)
+        except asyncio.TimeoutError:
+            continue
+        ev = msg.get("type", "?")
+        log(f"event {ev} {msg.get('param', '')} peer={msg.get('peeruri', '')}")
+        if ev in ("CALL_RINGING", "CALL_PROGRESS") and rang is None:
+            rang = now
+        elif ev == "CALL_ESTABLISHED":
+            answered = now
+        elif ev == "CALL_CLOSED":
+            closed = msg.get("param", "") or "closed"
+    return rang, answered, closed
 
 
 def main():
@@ -57,51 +73,14 @@ def main():
     if not args.uri:
         ap.error("give the phone's SIP address, or set VF_PHONE")
 
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    ctrl = Ctrl(CTRL)
+    LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with LOG.open("a") as out:
         def log(line):
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             print(f"{stamp} {line}", flush=True)
             out.write(f"{stamp} {line}\n")
 
-        log(f"--- dialing {args.uri}")
-        t0 = time.monotonic()
-        ctrl.send("dial", args.uri)
-        rang = answered = closed = None
-        hung_up = False
-        deadline = args.ring_timeout + args.hold + 30  # never wait forever
-        while closed is None:
-            now = time.monotonic() - t0
-            if not hung_up and answered is None and now > args.ring_timeout:
-                log("no answer in time: hanging up")
-                ctrl.send("hangup")
-                hung_up = True
-            if not hung_up and answered is not None and now - answered > args.hold:
-                log("hold time over: hanging up")
-                ctrl.send("hangup")
-                hung_up = True
-            if now > deadline:
-                closed = "gave up waiting for CALL_CLOSED"
-                break
-            msg = ctrl.recv()
-            if msg is None:
-                continue
-            if msg.get("response"):
-                data = str(msg.get("data", "")).strip()
-                log(f"response to {msg.get('token')}: ok={msg.get('ok')} {data}")
-                if msg.get("token") == "dial" and not msg.get("ok"):
-                    closed = f"dial refused: {data}"
-                continue
-            ev = msg.get("type", "?")
-            log(f"event {ev} {msg.get('param', '')} peer={msg.get('peeruri', '')}")
-            if ev in ("CALL_RINGING", "CALL_PROGRESS") and rang is None:
-                rang = now
-            elif ev == "CALL_ESTABLISHED":
-                answered = now
-            elif ev == "CALL_CLOSED":
-                closed = msg.get("param", "") or "closed"
-
+        rang, answered, closed = asyncio.run(call(args, log))
         ring = f"{rang:.1f} s" if rang is not None else "no ringing reported"
         ans = f"yes, after {answered:.1f} s" if answered is not None else "no"
         log(f"summary: ringing: {ring}; answered: {ans}; ended: {closed}")

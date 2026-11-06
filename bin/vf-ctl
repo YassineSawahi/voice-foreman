@@ -24,6 +24,7 @@ STATUS = HOME / ".local/state/voice-foreman/status.json"
 PROBE_LOG = HOME / ".local/state/voice-foreman/probe.log"
 SPOOL = HOME / ".local/state/voice-foreman/events"
 DEFAULTS = {"calls": True, "mode": "always", "quiet": None, "respect_dnd": True, "pin": None}
+os.umask(0o077)  # settings (the PIN), spool notes: yours alone
 UNITS = ["vf-speech.service", "vf-line.service", "vf-foremand.service"]  # start order
 
 
@@ -87,7 +88,7 @@ def power(on):
 
 def spool(note):
     """Hand foremand a note, the way the hooks do (written aside, then renamed in)."""
-    SPOOL.mkdir(parents=True, exist_ok=True)
+    SPOOL.mkdir(mode=0o700, parents=True, exist_ok=True)
     name = f"{time.time_ns()}-{note['hook_event_name']}.json"
     (SPOOL / f".{name}").write_text(json.dumps({**note, "at": time.time()}))
     (SPOOL / f".{name}").rename(SPOOL / name)

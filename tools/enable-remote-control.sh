@@ -4,6 +4,7 @@
 # Backs up ~/.claude/settings.json first. Undo: set "remoteControlAtStartup" to false (or restore the backup).
 set -e
 F=$HOME/.claude/settings.json
-cp "$F" "$F.bak-remote-control"
-jq '.remoteControlAtStartup = true' "$F" > "$F.tmp" && jq -e '.remoteControlAtStartup == true' "$F.tmp" >/dev/null && mv "$F.tmp" "$F"
+umask 077  # settings.json can hold tokens: the copies stay yours alone
+cp -p "$F" "$F.bak-remote-control"
+jq '.remoteControlAtStartup = true' "$F" > "$F.tmp" && chmod --reference="$F" "$F.tmp" && jq -e '.remoteControlAtStartup == true' "$F.tmp" >/dev/null && mv "$F.tmp" "$F"
 echo "Remote Control will start in new sessions. Open the Claude app on the phone (Code tab) to see them."

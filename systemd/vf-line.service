@@ -4,6 +4,8 @@ After=graphical-session.target pipewire-pulse.service
 PartOf=graphical-session.target
 
 [Service]
+# logs and state hold transcripts and call recaps: yours alone
+UMask=0077
 ExecStart=/usr/bin/baresip -f {{PROJECT}}/line/baresip -T -c
 Restart=always
 RestartSec=5

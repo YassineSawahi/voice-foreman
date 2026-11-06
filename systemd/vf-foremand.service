@@ -5,6 +5,8 @@ Wants=vf-line.service vf-speech.service
 PartOf=graphical-session.target
 
 [Service]
+# logs and state hold transcripts and call recaps: yours alone
+UMask=0077
 WorkingDirectory={{PROJECT}}
 # claude and omarchy-shell must be on PATH; install-services.sh fills it in from yours
 Environment=PATH={{PATH}}
