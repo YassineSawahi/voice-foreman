@@ -12,6 +12,7 @@
   vf-ctl desk on|off|toggle    talk to Omarchy at the PC (mic and speakers); during a phone call, on moves it here
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,10 +35,14 @@ def read_json(path, default):
 
 
 def save_settings(**changes):
+    """Rewrite settings.json, readable by you alone: it can hold the keypad PIN."""
     current = {**DEFAULTS, **read_json(SETTINGS, {}), **changes}
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.with_suffix(".tmp").write_text(json.dumps(current))
-    SETTINGS.with_suffix(".tmp").replace(SETTINGS)
+    SETTINGS.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = SETTINGS.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)  # a leftover would keep its old mode
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(json.dumps(current))
+    tmp.replace(SETTINGS)
     return current
 
 
