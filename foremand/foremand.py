@@ -76,21 +76,35 @@ PROMPT_FILE = PROJECT / "foremand/prompts/brain.md"
 # Reads run straight away; acting goes through Claude Code sessions (SendMessage, claude --bg),
 # which the persona confirms out loud first, and which keep their own permission checks.
 BRAIN_TOOLS = "Bash,Read,ListAgents,SendMessage,WebSearch"
-READ_ONLY_COMMANDS = [
-    "ls", "du", "df", "wc", "head", "tail", "stat", "file", "tree", "date", "uptime", "free",
-    "whoami", "hostname", "uname", "which", "ps", "pgrep", "lsblk", "nvidia-smi", "sensors",
-    "git status", "git log", "git diff", "git branch", "git show",
-    "docker ps", "systemctl --user status", "systemctl --user list-units", "tailscale status",
-    "claude agents", "claude logs", "omarchy version",
+# Read-only with any arguments: none of these has an option that writes, deletes, or runs something
+# (git's few exceptions are in BRAIN_DENIED). File contents go through Read; Claude Code also runs
+# plain reads like head and cat by itself, and holds them to BRAIN_DENIED's Read rules too.
+READ_ONLY_ANY_ARGS = [
+    "ls", "du", "df", "wc", "stat", "uname", "uptime", "free", "which", "ps", "pgrep", "lsblk",
+    "git status", "git log", "git diff", "git show",
+    "docker ps", "systemctl --user status", "systemctl --user list-units", "claude logs",
+]
+# Read-only only exactly as written. Given other arguments these delete or rename branches
+# (git branch -D/-m), write files (nvidia-smi -f), change settings (sensors -s, date -s, hostname),
+# serve a web page (tailscale status --web), or dispatch sessions (claude agents --dangerously-…).
+READ_ONLY_EXACT = [
+    "date", "whoami", "hostname", "nvidia-smi", "sensors", "omarchy version",
+    "git branch", "git branch --show-current", "git branch --list", "git branch -a", "git branch -r",
+    "git branch -v", "git branch -vv",
+    "tailscale status", "tailscale status --json", "tailscale status --active",
+    "claude agents --json", "claude agents --json --all",
 ]
 BRAIN_ALLOWED = (["Read", "ListAgents", "SendMessage", "WebSearch", "Bash(cd *)", "Bash(claude --bg *)",
                   "mcp__vf__text_phone", "mcp__vf__call_back", "mcp__vf__pc_action",
                   f"Bash({PROJECT}/bin/vf-session *)", f"Bash({PROJECT}/bin/vf-pref *)",
                   f"Bash({PROJECT}/bin/vf-stop-session *)"]
-                 + [f"Bash({c})" for c in READ_ONLY_COMMANDS]
-                 + [f"Bash({c} *)" for c in READ_ONLY_COMMANDS])
+                 + [f"Bash({c})" for c in READ_ONLY_ANY_ARGS + READ_ONLY_EXACT]
+                 + [f"Bash({c} *)" for c in READ_ONLY_ANY_ARGS])
+# Deny wins over allow. git log/diff/show can write their output to a file (--output), read a
+# file outside the repository (--no-index), or run a configured diff program (--ext-diff).
 BRAIN_DENIED = ["Read(~/.ssh/**)", "Read(~/.gnupg/**)", "Read(~/.claude/.credentials.json)",
-                "Read(**/.env)", "Read(**/.env.*)", "Read(~/.password-store/**)"]
+                "Read(**/.env)", "Read(**/.env.*)", "Read(~/.password-store/**)",
+                "Bash(git *--output*)", "Bash(git *--no-index*)", "Bash(git *--ext-diff*)"]
 HOLD_MUSIC = PROJECT / "sounds/hold.wav"
 STATE = Path(os.environ.get("VF_STATE", Path.home() / ".local/state/voice-foreman"))  # tests use their own
 LOG = STATE / "foremand.log"
