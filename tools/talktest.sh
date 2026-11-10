@@ -42,7 +42,8 @@ sed -i -E \
   -e "s|^audio_player\s.*|audio_player\t\taufile,$T/answer.wav|" \
   -e "s|^audio_alert\s.*|audio_alert\t\taufile,$T/alert.wav|" "$T/caller/config"
 echo "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2;mediaenc=srtp-mand" > "$T/caller/accounts"
-touch "$T/caller/contacts"
+# It dials the line from its contacts: the secret address is never on a command line, which other accounts can read.
+echo "\"Omarchy\" <sip:$LINE_USER@$ADDR:5070>" > "$T/caller/contacts"
 
 # 3. Dev line + foremand, then the call.
 baresip -f "$P/line/baresip-dev" -T -c > "$T/line.log" 2>&1 &
@@ -51,7 +52,7 @@ sleep 1
 VF_ALLOWED_CALLERS=${VF_ALLOWED_CALLERS:-$ADDR} VF_DISPATCH=0 VF_SPOOL="$T/spool" VF_STATE="$T/state" VF_NOTIFY=0 VF_CALLS=1 VF_IGNORE_QUIET=1 VF_CALLS_LOG="$T/calls.jsonl" "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$T/foremand.log" 2>&1 &
 FOREMAND=$!
 sleep 1
-own_bus "$T/caller.bus" baresip -f "$T/caller" -T -c -t 30 -e "/dial sip:$LINE_USER@$ADDR:5070" > "$T/caller.log" 2>&1 || true
+own_bus "$T/caller.bus" baresip -f "$T/caller" -T -c -t 30 -e "/contact_next" -e "/dialcontact" > "$T/caller.log" 2>&1 || true
 # after the hang-up Omarchy may still be working on what it promised; wait for the recap (up to 3 min)
 for i in $(seq 1 180); do grep -qE "recap texted|recap skipped|no recap|ran out of time|refused a caller" "$T/foremand.log" && break; sleep 1; done
 kill $FOREMAND $LINE 2>/dev/null || true

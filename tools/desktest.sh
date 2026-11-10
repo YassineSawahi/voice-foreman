@@ -120,7 +120,9 @@ case "$WHICH" in *B*)
   fake_baresip "$S/caller" 5072 42000 "$S/caller-mic.wav" "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2;mediaenc=srtp-mand"
   start_line_and_foremand ""
   desk_heard
-  own_bus "$S/caller.bus" baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:$LINE_USER@$ADDR:5070" > "$S/caller.log" 2>&1 &
+  # dialled from its contacts: the secret address is never on a command line, which other accounts can read
+  echo "\"Omarchy\" <sip:$LINE_USER@$ADDR:5070>" > "$S/caller/contacts"
+  own_bus "$S/caller.bus" baresip -f "$S/caller" -T -c -t 60 -e "/contact_next" -e "/dialcontact" > "$S/caller.log" 2>&1 &
   PIDS="$PIDS $!"
   wait_for "phone leg closed" 1 60; settle
   say "What day is it today?"

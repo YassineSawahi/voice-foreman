@@ -86,7 +86,7 @@ On Omarchy, add the bar widget: `omarchy plugin add https://github.com/YassineSa
 - **Port 5062:** EMUI (Huawei and Honor phones) reserves ports 5060–5061 and 31000–31900. Listening on the Tailscale address only, not `0.0.0.0`, keeps Baresip working across Wi-Fi changes.
 - **Background:** exempt Baresip and Tailscale from battery optimisation. On EMUI, also set both to "Manage manually" under App launch.
 - **Calling it:** `tools/configure-line.sh` (which `install-services.sh` runs) prints the line's address, `sip:vf-<secret>@<this PC's Tailscale IP>`. Save it as a contact in Baresip and call that. It works like a password: anyone who has it, and can reach the PC, can talk to Omarchy. To change it, delete `~/.config/voice-foreman/line-secret`, run `tools/configure-line.sh` again, restart `vf-line` and update the contact.
-- **Upgrading from `sip:claude@`:** older versions answered any address. Run `tools/configure-line.sh`, `systemctl --user restart vf-line vf-foremand`, and switch the contact to the new address. Until the line is on its secret address, foremand refuses incoming calls and tells you why.
+- **Upgrading from `sip:claude@`:** older versions answered any address. Run `tools/configure-line.sh`, `systemctl --user restart vf-line vf-foremand`, and switch the contact to the new address. Until the line is on its secret address, foremand refuses incoming calls and tells you why. If you set it up with `746ad5b`, make a new secret as above: that version passed it on `sed`'s command line, which another account could read while it ran.
 
 ### Tailnet policy
 
@@ -161,7 +161,7 @@ Everything is a `VF_*` environment variable, read from `~/.config/voice-foreman/
 Calls go between your phone and your PC over Tailscale and nowhere else. Speech is heard and spoken on your own GPU, and only the brain's conversation goes to Claude, on your own login. On the PC, other accounts can't read or drive any of it:
 
 - Logs, transcripts, call recaps, the spool and settings (keypad PIN included) live in `~/.local/state/voice-foreman` and `~/.config/voice-foreman`, readable by you alone. Keypad digits are never logged.
-- Only calls to the line's secret address are answered. Another account on the PC can reach the line's Tailscale address, but it can't read the secret (in `~/.config/voice-foreman/line-secret`, the line's config and its log, all yours alone), and claiming your phone's From address gets it nowhere. Call audio is SRTP.
+- Only calls to the line's secret address are answered. Another account on the PC can reach the line's Tailscale address, but it can't read the secret (in `~/.config/voice-foreman/line-secret`, the line's config and its log, all yours alone, and never on a command line, which any account can read), and claiming your phone's From address gets it nowhere. Call audio is SRTP.
 - The line is controlled over D-Bus on your session bus, which only your own processes can reach. There is no TCP control port.
 - The brain texts you and books callbacks through its own tools, so what it writes never sits on a command line. Commands it runs through Bash (`git log`, starting a session) show in the process list, as any command does.
 - The brain runs apart from your own Claude Code setup: no settings files, hooks, plugins, CLAUDE.md or auto-memory.

@@ -24,11 +24,23 @@ chmod 700 "$CONF"
 chmod 600 "$SECRET"
 LINE_USER=vf-$(cat "$SECRET")
 printf '%s\n' "$LINE_USER" | grep -qxE 'vf-[0-9a-f]{32}' || { echo "$SECRET should hold 32 hex digits: delete it and run this again" >&2; exit 1; }
+render() {  # render TEMPLATE: fill in {{ADDRESS}}, {{PHONE}} and {{LINE_USER}}
+  # The values go in through the environment, which only this account can read: any account on
+  # the PC can read a running program's command line, so the secret must never be on one.
+  ADDRESS=$ADDR PHONE=$VF_PHONE LINE_USER=$LINE_USER awk '
+    function fill(s, key, value,   out, i) {
+      out = ""
+      while ((i = index(s, key)) > 0) { out = out substr(s, 1, i - 1) value; s = substr(s, i + length(key)) }
+      return out s
+    }
+    { print fill(fill(fill($0, "{{ADDRESS}}", ENVIRON["ADDRESS"]), "{{PHONE}}", ENVIRON["PHONE"]), "{{LINE_USER}}", ENVIRON["LINE_USER"]) }
+  ' "$1"
+}
 for line in baresip baresip-dev; do
   for f in config accounts contacts; do
     out=$P/line/$line/$f
     rm -f "$out.new"
-    sed -e "s|{{ADDRESS}}|$ADDR|g" -e "s|{{PHONE}}|$VF_PHONE|g" -e "s|{{LINE_USER}}|$LINE_USER|g" "$P/line/$line/$f.in" > "$out.new"
+    render "$P/line/$line/$f.in" > "$out.new"
     mv -f "$out.new" "$out"  # a new file, so one an older version left readable is replaced
   done
 done
