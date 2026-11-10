@@ -10,6 +10,9 @@ P=$(cd "$(dirname "$0")/.." && pwd)
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
+# The dev line's secret address: it takes calls to no other.
+LINE_USER=$(sed -n -E 's/^"Omarchy" <sip:(vf-[0-9a-f]{32})@.*/\1/p' "$P/line/baresip-dev/accounts")
+[ -n "$LINE_USER" ] || { echo "run tools/configure-line.sh again: the dev line has no secret address" >&2; exit 1; }
 T=$HOME/.cache/vf-tmp/talktest
 QUESTION=${1:-"Hi Claude. What is two plus two?"}
 rm -rf "$T" && mkdir -p -m 700 "$T" && mkdir -p "$T/caller"
@@ -38,7 +41,7 @@ sed -i -E \
   -e "s|^audio_source\s.*|audio_source\t\taufile,$T/question.wav|" \
   -e "s|^audio_player\s.*|audio_player\t\taufile,$T/answer.wav|" \
   -e "s|^audio_alert\s.*|audio_alert\t\taufile,$T/alert.wav|" "$T/caller/config"
-echo "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2" > "$T/caller/accounts"
+echo "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2;mediaenc=srtp-mand" > "$T/caller/accounts"
 touch "$T/caller/contacts"
 
 # 3. Dev line + foremand, then the call.
@@ -48,7 +51,7 @@ sleep 1
 VF_ALLOWED_CALLERS=${VF_ALLOWED_CALLERS:-$ADDR} VF_DISPATCH=0 VF_SPOOL="$T/spool" VF_STATE="$T/state" VF_NOTIFY=0 VF_CALLS=1 VF_IGNORE_QUIET=1 VF_CALLS_LOG="$T/calls.jsonl" "$P/.venv/bin/python" "$P/foremand/foremand.py" > "$T/foremand.log" 2>&1 &
 FOREMAND=$!
 sleep 1
-own_bus "$T/caller.bus" baresip -f "$T/caller" -T -c -t 30 -e "/dial sip:claude@$ADDR:5070" > "$T/caller.log" 2>&1 || true
+own_bus "$T/caller.bus" baresip -f "$T/caller" -T -c -t 30 -e "/dial sip:$LINE_USER@$ADDR:5070" > "$T/caller.log" 2>&1 || true
 # after the hang-up Omarchy may still be working on what it promised; wait for the recap (up to 3 min)
 for i in $(seq 1 180); do grep -qE "recap texted|recap skipped|no recap|ran out of time|refused a caller" "$T/foremand.log" && break; sleep 1; done
 kill $FOREMAND $LINE 2>/dev/null || true

@@ -158,7 +158,7 @@ module			uuid.so
 #module			pcp.so
 
 # Media encryption modules
-#module			srtp.so
+module			srtp.so		# call audio is SRTP (accounts: mediaenc=srtp-mand): nothing else on the PC can slip sound into a call
 #module			dtls_srtp.so
 #module			gzrtp.so
 

@@ -1,20 +1,36 @@
 #!/bin/sh
 # Write the baresip line configs (line/baresip and line/baresip-dev) from their .in templates,
-# with this PC's Tailscale address and your phone's SIP address. Both come from
-# ~/.config/voice-foreman/env:
+# with this PC's Tailscale address, your phone's SIP address and the line's secret address.
+# The two addresses come from ~/.config/voice-foreman/env:
 #   VF_PHONE=sip:phone@100.64.0.2:5062   your phone (required)
 #   VF_LINE_ADDRESS=100.64.0.1           this PC (default: `tailscale ip -4`)
-# Run it again whenever either address changes, then: systemctl --user restart vf-line
+# The line only takes calls to sip:vf-<secret>@this-PC. The secret is made the first time and
+# kept in ~/.config/voice-foreman/line-secret; this prints the address to call from Baresip.
+# To change it, delete that file, run this again and update the address on the phone.
+# Run it again whenever an address changes, then: systemctl --user restart vf-line
 set -e
+umask 077  # the configs hold the line's secret address
 P=$(cd "$(dirname "$0")/.." && pwd)
-ENV=$HOME/.config/voice-foreman/env
+CONF=$HOME/.config/voice-foreman
+ENV=$CONF/env
+SECRET=$CONF/line-secret
 [ -f "$ENV" ] && . "$ENV"
 ADDR=${VF_LINE_ADDRESS:-$(tailscale ip -4 2>/dev/null | head -1)}
 [ -n "$ADDR" ] || { echo "no Tailscale address for this PC: is Tailscale up? Or set VF_LINE_ADDRESS in $ENV" >&2; exit 1; }
 [ -n "${VF_PHONE:-}" ] || { echo "set VF_PHONE (your phone's SIP address, e.g. sip:phone@100.64.0.2:5062) in $ENV" >&2; exit 1; }
+mkdir -p "$CONF"
+chmod 700 "$CONF"
+[ -s "$SECRET" ] || od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$SECRET"
+chmod 600 "$SECRET"
+LINE_USER=vf-$(cat "$SECRET")
+printf '%s\n' "$LINE_USER" | grep -qxE 'vf-[0-9a-f]{32}' || { echo "$SECRET should hold 32 hex digits: delete it and run this again" >&2; exit 1; }
 for line in baresip baresip-dev; do
   for f in config accounts contacts; do
-    sed -e "s|{{ADDRESS}}|$ADDR|g" -e "s|{{PHONE}}|$VF_PHONE|g" "$P/line/$line/$f.in" > "$P/line/$line/$f"
+    out=$P/line/$line/$f
+    rm -f "$out.new"
+    sed -e "s|{{ADDRESS}}|$ADDR|g" -e "s|{{PHONE}}|$VF_PHONE|g" -e "s|{{LINE_USER}}|$LINE_USER|g" "$P/line/$line/$f.in" > "$out.new"
+    mv -f "$out.new" "$out"  # a new file, so one an older version left readable is replaced
   done
 done
 echo "line configured: this PC $ADDR, your phone $VF_PHONE"
+echo "In Baresip on the phone, call (and save as a contact): sip:$LINE_USER@$ADDR"

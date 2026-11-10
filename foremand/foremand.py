@@ -54,9 +54,11 @@ CONFIG = {
     "phone": os.environ.get("VF_PHONE", ""),
     # the bar widget that reports whether the PC has been idle for 30 s (omarchy-phone)
     "idle_ipc": os.environ.get("VF_IDLE_IPC", "io.github.yassinesawahi.phone"),
-    # Who may call in: hosts, comma-separated; empty means only the phone's host. The tailnet
-    # policy is the first lock (only the phone can reach the line); this is the second.
+    # Who may call in: hosts, comma-separated; empty means only the phone's host. Only a filter:
+    # the caller writes its own From. The lock is the line's secret address (see refusal()).
     "allowed_callers": os.environ.get("VF_ALLOWED_CALLERS", ""),
+    # the line's secret, written by tools/configure-line.sh; its address is sip:vf-<secret>@this-PC
+    "line_secret": os.environ.get("VF_LINE_SECRET", str(Path.home() / ".config/voice-foreman/line-secret")),
     "notify": os.environ.get("VF_NOTIFY", "1") != "0",  # desktop notifications; tests turn them off
     "away_after": float(os.environ.get("VF_AWAY_AFTER", "180")),  # seconds idle before you count as away
     # VF_ALWAYS_CALL=1/0 forces the mode (tests); unset, the bar's settings.json decides.
@@ -887,9 +889,43 @@ def sip_host(uri):
     return m.group(1).lower() if m else ""
 
 
+def sip_user(uri):
+    """'sip:vf-0a1b@100.64.0.1:5060' -> 'vf-0a1b'."""
+    m = re.search(r"sips?:([^@>;:]+)@", uri or "")
+    return m.group(1).lower() if m else ""
+
+
+def line_user():
+    """The line's secret user part, or "" while tools/configure-line.sh hasn't made one."""
+    try:
+        secret = Path(CONFIG["line_secret"]).read_text().strip()
+    except OSError:
+        return ""
+    return "vf-" + secret if re.fullmatch(r"[0-9a-f]{32}", secret) else ""
+
+
 def caller_allowed(uri):
     allowed = {h.strip().lower() for h in CONFIG["allowed_callers"].split(",") if h.strip()}
     return sip_host(uri) in (allowed or {sip_host(CONFIG["phone"])})
+
+
+def refusal(ev):
+    """Why an incoming call may not reach the brain, or None.
+
+    The caller writes its own From, and baresip answers without SIP authentication, so the
+    From host proves nothing: another account on this PC can reach the line's Tailscale address
+    (the tailnet policy doesn't apply to the PC's own traffic) and claim to be the phone. What
+    proves it is the line's address: baresip only takes calls to sip:vf-<secret>@this-PC, and
+    the secret lives in your private config, where other accounts can't read it. A line still
+    on a guessable address, from before configure-line.sh made a secret, takes no calls."""
+    want = line_user()
+    if not want:
+        return "the line has no secret address yet: run tools/configure-line.sh, then restart vf-line"
+    if sip_user(ev.get("accountaor", "")) != want:
+        return "the line isn't on its secret address: run tools/configure-line.sh, then restart vf-line"
+    if not caller_allowed(ev.get("peeruri", "")):
+        return "a caller that isn't your phone"
+    return None
 
 
 def desktop_notify(title, body, critical=False):
@@ -1258,16 +1294,16 @@ async def main():
     async for ev in line.events():
         kind, call_id = ev.get("type"), ev.get("id")
         if (kind in ("CALL_INCOMING", "CALL_ESTABLISHED") and ev.get("direction") == "incoming"
-                and not caller_allowed(ev.get("peeruri", ""))):
+                and (call_id in refused or (why := refusal(ev)))):
             # Only the phone may call in. Hang up once per call: a second hangup after this call
             # is gone would land on whatever call is current.
             if call_id not in refused:
                 refused.add(call_id)
                 peer = ev.get("peeruri", "?")
-                log(f"call {call_id}: refused a caller that isn't your phone: {peer}")
+                log(f"call {call_id}: refused, {why}: {peer}")
                 await line.send("callfind", call_id)
                 await line.send("hangup", "scode=403 reason=Forbidden")
-                asyncio.create_task(asyncio.to_thread(desktop_notify, "Omarchy", f"Refused a call from {peer}", True))
+                asyncio.create_task(asyncio.to_thread(desktop_notify, "Omarchy", f"Refused a call from {peer}: {why}", True))
             continue
         if kind == "CALL_CLOSED" and call_id in refused:
             refused.discard(call_id)

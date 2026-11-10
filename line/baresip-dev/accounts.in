@@ -64,5 +64,7 @@
 # A registrar-less account
 #<sip:alice@office>;regint=0
 
-# Voice foreman: direct calls over the tailnet, no registrar.
-"Omarchy" <sip:claude@{{ADDRESS}}:5070>;regint=0;answermode=auto;audio_codecs=opus/48000/2,PCMU,PCMA
+# Voice foreman: direct calls over the tailnet, no registrar. The user part is a secret only your
+# phone knows (tools/configure-line.sh): a call to any other address gets 404 before it is answered.
+# baresip takes the caller's From address on its word, so From proves nothing.
+"Omarchy" <sip:{{LINE_USER}}@{{ADDRESS}}:5070>;regint=0;answermode=auto;audio_codecs=opus/48000/2,PCMU,PCMA;mediaenc=srtp-mand

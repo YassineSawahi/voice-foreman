@@ -30,7 +30,7 @@ sed -i -E \
   -e "s|^audio_source\s.*|audio_source\t\taufile,$T/silence.wav|" \
   -e "s|^audio_player\s.*|audio_player\t\taufile,$T/heard.wav|" \
   -e "s|^audio_alert\s.*|audio_alert\t\taufile,$T/alert.wav|" "$T/phone/config"
-echo "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2" > "$T/phone/accounts"
+echo "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2;mediaenc=srtp-mand" > "$T/phone/accounts"
 touch "$T/phone/contacts"
 own_bus "$T/phone.bus" baresip -f "$T/phone" -T -c -t 90 > "$T/phone.log" 2>&1 &
 PHONE=$!

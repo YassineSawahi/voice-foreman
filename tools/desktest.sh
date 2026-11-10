@@ -12,6 +12,9 @@ P=$(cd "$(dirname "$0")/.." && pwd)
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
+# The dev line's secret address: it takes calls to no other.
+LINE_USER=$(sed -n -E 's/^"Omarchy" <sip:(vf-[0-9a-f]{32})@.*/\1/p' "$P/line/baresip-dev/accounts")
+[ -n "$LINE_USER" ] || { echo "run tools/configure-line.sh again: the dev line has no secret address" >&2; exit 1; }
 T=$HOME/.cache/vf-tmp/desktest
 WHICH=${1:-AB}
 rm -rf "$T" && mkdir -p -m 700 "$T"
@@ -91,7 +94,7 @@ case "$WHICH" in *A*)
   # the fake phone says "Hello?" 1.5 s after it picks up
   tts "Hello?" "$S/hello.raw"
   ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$S/hello.raw" -af "adelay=1500,apad=pad_dur=60" -ar 48000 "$S/phone-mic.wav"
-  fake_baresip "$S/phone" 5074 43000 "$S/phone-mic.wav" "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2"
+  fake_baresip "$S/phone" 5074 43000 "$S/phone-mic.wav" "\"Phone\" <sip:phone@$ADDR:5074>;regint=0;answermode=auto;audio_codecs=opus/48000/2;mediaenc=srtp-mand"
   own_bus "$S/phone.bus" baresip -f "$S/phone" -T -c -t 200 > "$S/phone.log" 2>&1 &
   PIDS="$PIDS $!"
   start_line_and_foremand ""
@@ -114,10 +117,10 @@ case "$WHICH" in *B*)
   # the caller asks to move 6 s in (after the greeting)
   tts "Please move this call to my PC." "$S/ask.raw"
   ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$S/ask.raw" -af "adelay=6000,apad=pad_dur=40" -ar 48000 "$S/caller-mic.wav"
-  fake_baresip "$S/caller" 5072 42000 "$S/caller-mic.wav" "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2"
+  fake_baresip "$S/caller" 5072 42000 "$S/caller-mic.wav" "\"Caller\" <sip:caller@$ADDR:5072>;regint=0;audio_codecs=opus/48000/2;mediaenc=srtp-mand"
   start_line_and_foremand ""
   desk_heard
-  own_bus "$S/caller.bus" baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:claude@$ADDR:5070" > "$S/caller.log" 2>&1 &
+  own_bus "$S/caller.bus" baresip -f "$S/caller" -T -c -t 60 -e "/dial sip:$LINE_USER@$ADDR:5070" > "$S/caller.log" 2>&1 &
   PIDS="$PIDS $!"
   wait_for "phone leg closed" 1 60; settle
   say "What day is it today?"
