@@ -20,5 +20,5 @@ ADD https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero
 
 COPY server.py /app/server.py
 WORKDIR /app
-EXPOSE 8765
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8765"]
+# No port: a socket in /run/speech, which compose.yaml binds to a folder only you can enter.
+CMD ["uvicorn", "server:app", "--uds", "/run/speech/speech.sock"]

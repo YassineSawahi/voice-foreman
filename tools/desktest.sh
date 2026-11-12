@@ -9,6 +9,8 @@ set -e
 # The dev line takes the same D-Bus name as your real line, so each test runs on a private bus of its own.
 [ -n "$VF_TEST_BUS" ] || VF_TEST_BUS=1 exec dbus-run-session -- sh "$0" "$@"
 P=$(cd "$(dirname "$0")/.." && pwd)
+# the speech service listens on a socket in your runtime folder, not on a port
+SPEECH=${VF_SPEECH_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voice-foreman/speech/speech.sock}
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
@@ -37,7 +39,7 @@ hangup_on() {  # hangup_on <bus file>: that fake hangs up, as you would on the p
   DBUS_SESSION_BUS_ADDRESS=$(cat "$1") busctl --user call com.github.Baresip /baresip com.github.Baresip invoke s hangup >/dev/null
 }
 
-tts() { curl -sf -X POST 127.0.0.1:8765/tts -H 'Content-Type: application/json' -d "{\"text\": \"$1\"}" -o "$2"; }
+tts() { curl -sf --unix-socket "$SPEECH" -X POST http://speech/tts -H 'Content-Type: application/json' -d "{\"text\": \"$1\"}" -o "$2"; }
 say() {  # speak into the fake desk microphone
   tts "$1" "$S/say.raw"
   echo "$(date +%T.%3N) >> desk mic: $1" >> "$S/script.log"
@@ -81,11 +83,11 @@ desk_heard() {
 report() {
   echo; echo "===== scenario $1"; cat "$S/script.log" 2>/dev/null
   echo "== foremand"; grep -vE "opening:" "$S/foremand.log" | cut -c1-170
-  echo "== heard on the desk speakers"; curl -sf -X POST 127.0.0.1:8765/stt --data-binary @"$S/desk-heard.raw"; echo
+  echo "== heard on the desk speakers"; curl -sf --unix-socket "$SPEECH" -X POST http://speech/stt --data-binary @"$S/desk-heard.raw"; echo
   for f in "$S"/*/heard.wav; do
     [ -s "$f" ] || continue
     ffmpeg -loglevel error -y -i "$f" -f s16le -ar 16000 -ac 1 "$f.raw"
-    echo "== heard by $(basename "$(dirname "$f")")"; curl -sf -X POST 127.0.0.1:8765/stt --data-binary @"$f.raw"; echo
+    echo "== heard by $(basename "$(dirname "$f")")"; curl -sf --unix-socket "$SPEECH" -X POST http://speech/stt --data-binary @"$f.raw"; echo
   done
 }
 

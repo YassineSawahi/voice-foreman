@@ -7,9 +7,16 @@ services:
   speech:
     build: ./speech
     image: voice-foreman/speech:dev
-    ports:
-      - "127.0.0.1:8765:8765"   # local only
+    # No port: on 127.0.0.1 another account could take it while this is down, and hear you.
+    # The service listens on a socket in $XDG_RUNTIME_DIR/voice-foreman/speech, a folder only you
+    # can enter, which vf-speech.service makes (0700) before this starts; it's never created here.
+    command: ["uvicorn", "server:app", "--uds", "/run/speech/speech.sock"]
     volumes:
+      - type: bind
+        source: ${XDG_RUNTIME_DIR:?start it with systemctl --user start vf-speech}/voice-foreman/speech
+        target: /run/speech
+        bind:
+          create_host_path: false
       - ./models/kokoro:/models/kokoro:ro
       - whisper-cache:/root/.cache/huggingface
     environment:

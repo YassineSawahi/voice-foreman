@@ -11,13 +11,15 @@ to the speech service and a Claude brain:
 Everything is configured with VF_* environment variables (see CONFIG below).
 """
 import asyncio
+import http.client
 import json
 import os
 import re
+import socket
+import stat
 import subprocess
 import sys
 import time
-import urllib.request
 import wave
 from collections import deque
 from datetime import datetime
@@ -32,7 +34,9 @@ os.umask(0o077)  # logs, transcripts, recaps and state are yours alone
 
 PROJECT = Path(__file__).resolve().parent.parent
 CONFIG = {
-    "speech": os.environ.get("VF_SPEECH", "127.0.0.1:8765"),
+    # The speech service listens on a socket in your runtime folder, never on a port (see speech_socket)
+    "speech_socket": os.environ.get("VF_SPEECH_SOCKET") or os.path.join(
+        os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}", "voice-foreman", "speech", "speech.sock"),
     "rx_source": os.environ.get("VF_RX_SOURCE", "vf_rx.monitor"),
     "tx_sink": os.environ.get("VF_TX_SINK", "vf_tx"),
     # desk talks: the PC's own microphone and speakers (pulse names; @DEFAULT_..@ follows your defaults)
@@ -222,16 +226,58 @@ def for_voice(text):
     return text
 
 
+def speech_socket():
+    """The speech service's socket, once its folder checks out as yours alone (root, which runs
+    Docker, can enter it anyway). A port on 127.0.0.1 could be taken by another account while the
+    service is down, and that account would then hear you and what Omarchy says; nobody else can
+    put a socket in this folder."""
+    path = CONFIG["speech_socket"]
+    folder = os.path.dirname(path)
+    st = os.lstat(folder)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise PermissionError(f"{folder} isn't a folder of yours alone: not using a speech service there")
+    return path
+
+
+class SpeechConnection(http.client.HTTPConnection):
+    """HTTP to the speech service, over its socket."""
+
+    def __init__(self, timeout):
+        super().__init__("speech", timeout=timeout)
+
+    def connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect(speech_socket())
+        except OSError:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+def speech_post(path, body, headers=None, timeout=20):
+    """POST to the speech service: (headers, body). Errors are OSErrors, as urllib's were."""
+    conn = SpeechConnection(timeout)
+    try:
+        conn.request("POST", path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read()
+        if r.status != 200:
+            raise OSError(f"speech service {path}: HTTP {r.status}")
+        return r.headers, data
+    finally:
+        conn.close()
+
+
 def tts(text):
     """Kokoro through the speech service: returns int16 samples at OUT_RATE."""
     body = {"text": for_voice(text)}
     if CONFIG["voice"]:
         body["voice"] = CONFIG["voice"]
-    req = urllib.request.Request(f"http://{CONFIG['speech']}/tts", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        rate = int(r.headers.get("X-Sample-Rate", OUT_RATE))
-        pcm = np.frombuffer(r.read(), dtype="<i2")
+    headers, data = speech_post("/tts", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    rate = int(headers.get("X-Sample-Rate", OUT_RATE))
+    pcm = np.frombuffer(data, dtype="<i2")
     if rate != OUT_RATE:  # cheap linear resample; Kokoro is 24 kHz so this rarely runs
         x = np.linspace(0, len(pcm) - 1, int(len(pcm) * OUT_RATE / rate))
         pcm = np.interp(x, np.arange(len(pcm)), pcm).astype("<i2")
@@ -259,8 +305,7 @@ def stt_hints():
 
 def warm_stt():
     """Half a second of silence through speech-to-text, to wake the GPU path up."""
-    req = urllib.request.Request(f"http://{CONFIG['speech']}/stt", data=bytes(IN_RATE))
-    urllib.request.urlopen(req, timeout=20).read()
+    speech_post("/stt", bytes(IN_RATE))
 
 
 def hold_music():
@@ -814,7 +859,7 @@ class Call:
             "parec", f"--device={self._devices()[0]}", "--format=s16le", f"--rate={IN_RATE}",
             "--channels=1", "--raw", "--latency-msec=20", stdout=asyncio.subprocess.PIPE)
         try:
-            async with websockets.connect(f"ws://{CONFIG['speech']}/listen", max_size=None) as ws:
+            async with websockets.unix_connect(speech_socket(), "ws://speech/listen", max_size=None) as ws:
                 if self.hints:
                     await ws.send(json.dumps({"prompt": self.hints}))
 

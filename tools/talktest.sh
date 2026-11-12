@@ -1,12 +1,14 @@
 #!/bin/sh
 # End-to-end talk test, no phone needed: a fake caller (baresip on port 5072) calls the
 # dev line, asks a spoken question, records what Claude says back, and the speech service
-# transcribes the recording. Needs the speech service up (docker compose up -d speech) and the
+# transcribes the recording. Needs the speech service up (systemctl --user start vf-speech) and the
 # vf_rx/vf_tx sinks. Usage: tools/talktest.sh ["question text"]
 set -e
 # The dev line takes the same D-Bus name as your real line, so each test runs on a private bus of its own.
 [ -n "$VF_TEST_BUS" ] || VF_TEST_BUS=1 exec dbus-run-session -- sh "$0" "$@"
 P=$(cd "$(dirname "$0")/.." && pwd)
+# the speech service listens on a socket in your runtime folder, not on a port
+SPEECH=${VF_SPEECH_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voice-foreman/speech/speech.sock}
 # This PC's Tailscale address, as tools/configure-line.sh wrote it into the dev line.
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
@@ -27,7 +29,7 @@ hangup_on() {  # hangup_on <bus file>: that fake hangs up, as you would on the p
 # 1. The question as audio: 6 s of silence (Claude greets first), the question, then room to answer.
 if [ -n "$TALK_WAV" ]; then cp "$TALK_WAV" "$T/question.wav"  # a prepared script of what the caller says
 else
-curl -sf -X POST 127.0.0.1:8765/tts -H 'Content-Type: application/json' \
+curl -sf --unix-socket "$SPEECH" -X POST http://speech/tts -H 'Content-Type: application/json' \
   -d "{\"text\": \"$QUESTION\"}" -o "$T/q.raw"
 ffmpeg -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$T/q.raw" \
   -af "adelay=6000,apad=pad_dur=14" -ar 48000 "$T/question.wav"
@@ -62,7 +64,7 @@ echo "== foremand log"; cat "$T/foremand.log"
 if [ -s "$T/answer.wav" ]; then
   ffmpeg -loglevel error -y -i "$T/answer.wav" -f s16le -ar 16000 -ac 1 "$T/answer.raw"
   echo "== what the caller heard (transcribed)"
-  curl -sf -X POST 127.0.0.1:8765/stt --data-binary @"$T/answer.raw"; echo
+  curl -sf --unix-socket "$SPEECH" -X POST http://speech/stt --data-binary @"$T/answer.raw"; echo
 else
   echo "== the caller recorded nothing; see $T/caller.log and $T/line.log"
 fi

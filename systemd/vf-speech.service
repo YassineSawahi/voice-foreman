@@ -6,7 +6,12 @@ PartOf=graphical-session.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+UMask=0077
 WorkingDirectory={{PROJECT}}
+# The service's socket lives in your runtime folder, where only you can reach it (see compose.yaml)
+Environment=XDG_RUNTIME_DIR=%t
+ExecStartPre=/usr/bin/mkdir -p %t/voice-foreman/speech
+ExecStartPre=/usr/bin/chmod 0700 %t/voice-foreman %t/voice-foreman/speech
 ExecStart=/usr/bin/docker compose up -d speech
 ExecStop=/usr/bin/docker compose stop speech
 

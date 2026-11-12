@@ -1,7 +1,12 @@
 [Unit]
 Description=Voice foreman call handler (Omarchy on the phone)
-After=vf-line.service vf-speech.service
-Wants=vf-line.service vf-speech.service
+# After the session target too, like the line and speech: without it systemd sees an ordering
+# cycle at login (the target waits for us, we wait for speech, speech waits for the target) and
+# drops a job, so foremand wouldn't start on its own.
+After=graphical-session.target vf-line.service vf-speech.service
+Wants=vf-line.service
+# no speech service, no foremand: it never looks for one anywhere else
+Requires=vf-speech.service
 PartOf=graphical-session.target
 
 [Service]

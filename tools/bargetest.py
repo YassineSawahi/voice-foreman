@@ -163,7 +163,8 @@ class FakeProc:
 async def listen(call, items):
     async def fake_exec(*_, **__):
         return FakeProc()
-    fm.websockets.connect = lambda *_, **__: FakeWS(items)
+    fm.speech_socket = lambda: "speech.sock"
+    fm.websockets.unix_connect = lambda *_, **__: FakeWS(items)
     real_exec, fm.asyncio.create_subprocess_exec = fm.asyncio.create_subprocess_exec, fake_exec
     try:
         await call._listen()
