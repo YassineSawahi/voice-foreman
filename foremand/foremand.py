@@ -61,7 +61,7 @@ CONFIG = {
     # Who may call in: hosts, comma-separated; empty means only the phone's host. Only a filter:
     # the caller writes its own From. The lock is the line's secret address (see refusal()).
     "allowed_callers": os.environ.get("VF_ALLOWED_CALLERS", ""),
-    # the line's secret, written by tools/configure-line.sh; its address is sip:vf-<secret>@this-PC
+    # the line's secret, written by tools/configure-line.sh; its address is sip:vf<secret>@this-PC
     "line_secret": os.environ.get("VF_LINE_SECRET", str(Path.home() / ".config/voice-foreman/line-secret")),
     "notify": os.environ.get("VF_NOTIFY", "1") != "0",  # desktop notifications; tests turn them off
     "away_after": float(os.environ.get("VF_AWAY_AFTER", "180")),  # seconds idle before you count as away
@@ -935,7 +935,7 @@ def sip_host(uri):
 
 
 def sip_user(uri):
-    """'sip:vf-0a1b@100.64.0.1:5060' -> 'vf-0a1b'."""
+    """'sip:vf0a1b@100.64.0.1:5060' -> 'vf0a1b'."""
     m = re.search(r"sips?:([^@>;:]+)@", uri or "")
     return m.group(1).lower() if m else ""
 
@@ -946,7 +946,7 @@ def line_user():
         secret = Path(CONFIG["line_secret"]).read_text().strip()
     except OSError:
         return ""
-    return "vf-" + secret if re.fullmatch(r"[0-9a-f]{32}", secret) else ""
+    return "vf" + secret if re.fullmatch(r"[0-9a-f]{32}", secret) else ""
 
 
 def caller_allowed(uri):
@@ -960,7 +960,7 @@ def refusal(ev):
     The caller writes its own From, and baresip answers without SIP authentication, so the
     From host proves nothing: another account on this PC can reach the line's Tailscale address
     (the tailnet policy doesn't apply to the PC's own traffic) and claim to be the phone. What
-    proves it is the line's address: baresip only takes calls to sip:vf-<secret>@this-PC, and
+    proves it is the line's address: baresip only takes calls to sip:vf<secret>@this-PC, and
     the secret lives in your private config, where other accounts can't read it. A line still
     on a guessable address, from before configure-line.sh made a secret, takes no calls."""
     want = line_user()

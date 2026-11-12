@@ -4,7 +4,8 @@
 # The two addresses come from ~/.config/voice-foreman/env:
 #   VF_PHONE=sip:phone@100.64.0.2:5062   your phone (required)
 #   VF_LINE_ADDRESS=100.64.0.1           this PC (default: `tailscale ip -4`)
-# The line only takes calls to sip:vf-<secret>@this-PC. The secret is made the first time and
+# The line only takes calls to sip:vf<secret>@this-PC: no dash, which Baresip on Android drops from
+# a contact's address. The secret is made the first time and
 # kept in ~/.config/voice-foreman/line-secret; this prints the address to call from Baresip.
 # To change it, delete that file, run this again and update the address on the phone.
 # Run it again whenever an address changes, then: systemctl --user restart vf-line
@@ -22,8 +23,8 @@ mkdir -p "$CONF"
 chmod 700 "$CONF"
 [ -s "$SECRET" ] || od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$SECRET"
 chmod 600 "$SECRET"
-LINE_USER=vf-$(cat "$SECRET")
-printf '%s\n' "$LINE_USER" | grep -qxE 'vf-[0-9a-f]{32}' || { echo "$SECRET should hold 32 hex digits: delete it and run this again" >&2; exit 1; }
+LINE_USER=vf$(cat "$SECRET")
+printf '%s\n' "$LINE_USER" | grep -qxE 'vf[0-9a-f]{32}' || { echo "$SECRET should hold 32 hex digits: delete it and run this again" >&2; exit 1; }
 render() {  # render TEMPLATE: fill in {{ADDRESS}}, {{PHONE}} and {{LINE_USER}}
   # The values go in through the environment, which only this account can read: any account on
   # the PC can read a running program's command line, so the secret must never be on one.

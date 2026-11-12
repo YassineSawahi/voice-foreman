@@ -15,7 +15,7 @@ SPEECH=${VF_SPEECH_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voice-foreman/
 ADDR=$(sed -n -E 's/^sip_listen\s+([^:]+):.*/\1/p' "$P/line/baresip-dev/config")
 [ -n "$ADDR" ] || { echo "run tools/configure-line.sh first" >&2; exit 1; }
 # The dev line's secret address: it takes calls to no other.
-LINE_USER=$(sed -n -E 's/^"Omarchy" <sip:(vf-[0-9a-f]{32})@.*/\1/p' "$P/line/baresip-dev/accounts")
+LINE_USER=$(sed -n -E 's/^"Omarchy" <sip:(vf[0-9a-f]{32})@.*/\1/p' "$P/line/baresip-dev/accounts")
 [ -n "$LINE_USER" ] || { echo "run tools/configure-line.sh again: the dev line has no secret address" >&2; exit 1; }
 T=$HOME/.cache/vf-tmp/desktest
 WHICH=${1:-AB}
