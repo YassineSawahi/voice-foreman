@@ -79,8 +79,11 @@ CONFIG = {
 PROMPT_FILE = PROJECT / "foremand/prompts/brain.md"
 
 # What the brain may do on a call. dontAsk mode refuses everything not allowed here.
-# Reads run straight away; acting goes through Claude Code sessions (SendMessage, claude --bg),
+# Reads run straight away; acting goes through Claude Code sessions (SendMessage, bin/vf-start-session),
 # which the persona confirms out loud first, and which keep their own permission checks.
+# Never allow `claude --bg *`: any option could follow it (a shell job, --dangerously-skip-permissions,
+# --permission-mode bypassPermissions, --settings, --mcp-config, --allowedTools). vf-start-session
+# fixes the command and passes the task after `--`.
 BRAIN_TOOLS = "Bash,Read,ListAgents,SendMessage,WebSearch"
 # Read-only with any arguments: none of these has an option that writes, deletes, or runs something
 # (git's few exceptions are in BRAIN_DENIED). File contents go through Read; Claude Code also runs
@@ -100,17 +103,19 @@ READ_ONLY_EXACT = [
     "tailscale status", "tailscale status --json", "tailscale status --active",
     "claude agents --json", "claude agents --json --all",
 ]
-BRAIN_ALLOWED = (["Read", "ListAgents", "SendMessage", "WebSearch", "Bash(cd *)", "Bash(claude --bg *)",
+BRAIN_ALLOWED = (["Read", "ListAgents", "SendMessage", "WebSearch", "Bash(cd *)",
                   "mcp__vf__text_phone", "mcp__vf__call_back", "mcp__vf__pc_action",
                   f"Bash({PROJECT}/bin/vf-session *)", f"Bash({PROJECT}/bin/vf-pref *)",
-                  f"Bash({PROJECT}/bin/vf-stop-session *)"]
+                  f"Bash({PROJECT}/bin/vf-start-session *)", f"Bash({PROJECT}/bin/vf-stop-session *)"]
                  + [f"Bash({c})" for c in READ_ONLY_ANY_ARGS + READ_ONLY_EXACT]
                  + [f"Bash({c} *)" for c in READ_ONLY_ANY_ARGS])
 # Deny wins over allow. git log/diff/show can write their output to a file (--output), read a
 # file outside the repository (--no-index), or run a configured diff program (--ext-diff).
+# Sessions start only through vf-start-session, never claude --bg directly (see above).
 BRAIN_DENIED = ["Read(~/.ssh/**)", "Read(~/.gnupg/**)", "Read(~/.claude/.credentials.json)",
                 "Read(**/.env)", "Read(**/.env.*)", "Read(~/.password-store/**)",
-                "Bash(git *--output*)", "Bash(git *--no-index*)", "Bash(git *--ext-diff*)"]
+                "Bash(git *--output*)", "Bash(git *--no-index*)", "Bash(git *--ext-diff*)",
+                "Bash(claude *--bg*)", "Bash(claude *--background*)"]
 HOLD_MUSIC = PROJECT / "sounds/hold.wav"
 STATE = Path(os.environ.get("VF_STATE", Path.home() / ".local/state/voice-foreman"))  # tests use their own
 LOG = STATE / "foremand.log"

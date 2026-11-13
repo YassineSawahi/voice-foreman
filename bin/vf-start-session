@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""vf-start-session FOLDER TASK: start a background Claude Code session in FOLDER, working on TASK.
+
+The brain's only way to start a session. The command is fixed here: `claude --bg --permission-mode
+auto -- TASK`, so the session keeps your own settings and permission checks, and nothing the brain
+writes can add an option (a shell job, skipped or looser permissions, other settings, tools or MCP
+servers). TASK comes after `--` and must start with a letter or digit, so it is always the prompt:
+never an option, a /command or a !shell line.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+if len(sys.argv) != 3:
+    sys.exit(__doc__)
+folder, task = Path(sys.argv[1]).expanduser(), sys.argv[2].strip()
+if not folder.is_dir():
+    sys.exit(f"No such folder: {folder}")
+if not task[:1].isalnum():
+    sys.exit("Start the task with a word. It's the session's first message, never an option or a command.")
+try:
+    r = subprocess.run(["claude", "--bg", "--permission-mode", "auto", "--", task],
+                       cwd=folder, capture_output=True, text=True, timeout=60)
+except subprocess.TimeoutExpired:
+    sys.exit("Claude Code didn't answer within a minute.")
+print((r.stdout or r.stderr).strip()[:500])
+sys.exit(r.returncode)
